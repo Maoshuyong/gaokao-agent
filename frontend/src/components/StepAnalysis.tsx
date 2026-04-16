@@ -70,7 +70,7 @@ export default function StepAnalysis() {
         console.error(err)
       }
     }
-    fetchStats()
+    fetchAll()
   }, [province, category, score])
 
   // 过滤出当前科类的省控线
