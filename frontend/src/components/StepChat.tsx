@@ -5,7 +5,11 @@ import { getRankWithFallback, buildReportContext, buildBasicPrompt } from '@/uti
 
 export default function StepChat() {
   const { province, category, score, reportData, rankData, setStep, setRankData } = useAppStore()
-  setStep(5)
+
+  // 同步步骤状态（必须在 useEffect 中调用，避免渲染死循环）
+  useEffect(() => {
+    setStep(5)
+  }, [setStep])
 
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
