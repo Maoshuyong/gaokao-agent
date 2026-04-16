@@ -1,15 +1,22 @@
 """
-FastAPI 应用入口 - 高考志愿填报数据服务
+FastAPI 应用入口 - 高考志愿填报数据服务 + 前端静态托管
 """
 import os
-from fastapi import FastAPI
+from pathlib import Path
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import logging
 
 from config import settings
 from db import init_db
-from api import tools_router, colleges_router
+from api import tools_router, colleges_router, report_router
+
+# 前端静态文件目录
+STATIC_DIR = Path(__file__).parent / "static"
+# API / 文档路径前缀（不由 SPA 处理）
+_API_PREFIXES = ("/api", "/docs", "/redoc", "/openapi.json")
 
 # 配置日志
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -52,7 +59,9 @@ async def startup_event():
 
 @app.get("/")
 async def root():
-    """根路径"""
+    """根路径 — 有前端时返回 SPA，否则返回 API 信息"""
+    if STATIC_DIR.exists() and (STATIC_DIR / "index.html").exists():
+        return FileResponse(str(STATIC_DIR / "index.html"))
     return {
         "name": settings.PROJECT_NAME,
         "version": settings.VERSION,
@@ -72,6 +81,7 @@ async def health_check():
 # 注册路由
 app.include_router(tools_router)
 app.include_router(colleges_router)
+app.include_router(report_router)
 
 
 # 全局异常处理
@@ -82,6 +92,27 @@ async def global_exception_handler(request, exc):
         status_code=500,
         content={"detail": "服务器内部错误，请稍后重试"}
     )
+
+
+# ========== 前端静态文件托管（中间件方式） ==========
+if STATIC_DIR.exists():
+    class SPAMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            path = request.url.path
+            # API / 文档路径交给正常处理
+            if any(path.startswith(p) for p in _API_PREFIXES):
+                return await call_next(request)
+            # 静态文件存在则直接返回
+            file_path = STATIC_DIR / path.lstrip("/")
+            if file_path.is_file():
+                return FileResponse(str(file_path))
+            # 否则返回 index.html（SPA 路由）
+            return FileResponse(str(STATIC_DIR / "index.html"))
+
+    app.add_middleware(SPAMiddleware)
+    logger.info(f"前端静态文件已挂载 (SPA 中间件): {STATIC_DIR}")
+else:
+    logger.warning(f"前端静态文件目录不存在，仅提供 API 服务: {STATIC_DIR}")
 
 
 if __name__ == "__main__":

@@ -3,9 +3,9 @@ services:
     name: gaokao-agent
     runtime: docker
     plan: free
-    repo: https://github.com/fengweitao/gaokao-agent
+    repo: https://github.com/Maoshuyong/gaokao-agent
     branch: main
-    dockerContext: backend
+    dockerContext: .
     dockerfilePath: ./Dockerfile
     envVars:
       - key: PYTHON_VERSION
