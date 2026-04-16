@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any
 import uuid
 
+from sqlalchemy import func
 from db import get_db
 from services.scoring_service import ScoringService
 from models import College, Score
@@ -209,14 +210,23 @@ async def recommend_colleges(
     基于 rank 查找有该省该科类录取数据的院校，并按排名排序。
     Agent 可用此接口获取候选院校列表，再调用 /probability 计算具体概率。
     """
-    # 查找有该省该科类历史数据的院校
-    valid_codes = db.query(Score.college_code).filter(
+    # 查找有该省该科类历史数据的院校，取最新一年的录取位次作为排序依据
+    latest_scores = db.query(
+        Score.college_code,
+        func.min(Score.min_rank).label("latest_rank")
+    ).filter(
         Score.province == province,
-        Score.category == category
-    ).distinct().subquery()
+        Score.category == category,
+        Score.min_rank.isnot(None)
+    ).group_by(Score.college_code).subquery()
 
     query = db.query(College).filter(
-        College.code.in_(valid_codes)
+        College.code.in_(
+            db.query(Score.college_code).filter(
+                Score.province == province,
+                Score.category == category
+            ).distinct()
+        )
     )
 
     # 筛选条件
@@ -232,8 +242,9 @@ async def recommend_colleges(
         provinces = [p.strip() for p in target_provinces.split(",")]
         query = query.filter(College.province.in_(provinces))
 
-    # 排序
-    query = query.order_by(College.ranking.asc().nullslast())
+    # 按录取位次排序（位次越低越好），无位次数据的放后面
+    query = query.outerjoin(latest_scores, College.code == latest_scores.c.college_code)
+    query = query.order_by(latest_scores.c.latest_rank.asc().nullslast())
 
     # 分页
     offset = (page - 1) * page_size
