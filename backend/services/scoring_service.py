@@ -1,10 +1,18 @@
 """
 录取概率计算服务
+
+核心逻辑：
+  rank_ratio = user_rank / historical_avg_rank
+  位次越小越好，所以：
+  - ratio < 1: 考生位次优于院校录取位次 → 高概率（保底/稳妥）
+  - ratio ≈ 1: 位次接近 → 冲刺/稳妥
+  - ratio > 1: 考生位次劣于院校录取位次 → 低概率（不建议）
 """
 from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from models import Score, College
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -12,20 +20,21 @@ logger = logging.getLogger(__name__)
 class ScoringService:
     """录取概率计算服务"""
 
-    # 档位阈值
+    # 档位阈值（rank_ratio 区间）
+    # 位次越小越好：ratio < 1 表示考生位次更高
     LEVEL_THRESHOLDS = {
-        "冲刺": (0, 0.90),      # 排名/历史均值 < 0.90
-        "稳妥": (0.90, 1.05),   # 0.90 <= 排名/历史均值 < 1.05
-        "保底": (1.05, 1.20),    # 1.05 <= 排名/历史均值 < 1.20
-        "不建议": (1.20, 999.0)  # >= 1.20
+        "冲刺":   (0.80, 1.05),   # 考生位次是院校录取位次的 80%~105%，可以冲一冲
+        "稳妥":   (0.60, 0.80),   # 考生位次是院校录取位次的 60%~80%，比较稳
+        "保底":   (0.30, 0.60),   # 考生位次远低于院校录取位次，稳上
+        "不建议": (1.05, 999.0),  # 考生位次高于院校录取位次 5% 以上，录取困难
     }
 
-    # 概率区间
+    # 概率区间（用于在阈值区间内线性插值）
     LEVEL_PROBABILITIES = {
-        "冲刺": (0.15, 0.55),
-        "稳妥": (0.55, 0.85),
-        "保底": (0.85, 0.98),
-        "不建议": (0, 0.15)
+        "冲刺":   (0.20, 0.55),   # 冲刺院校录取概率 20%~55%
+        "稳妥":   (0.60, 0.85),   # 稳妥院校录取概率 60%~85%
+        "保底":   (0.85, 0.98),   # 保底院校录取概率 85%~98%
+        "不建议": (0.02, 0.18),   # 不建议院校录取概率 2%~18%
     }
 
     def __init__(self, db: Session):
@@ -47,7 +56,7 @@ class ScoringService:
         ).order_by(Score.year.desc()).limit(5).all()
 
     def calculate_avg_rank(self, scores: List[Score]) -> Optional[float]:
-        """计算历史排名均值"""
+        """计算历史排名均值（取最差年份的位次，作为保守估计）"""
         if not scores:
             return None
 
@@ -55,66 +64,85 @@ class ScoringService:
         if not valid_ranks:
             return None
 
-        # 加权平均（近年权重更高）
-        weights = [1 + 0.2 * (len(scores) - i) for i in range(len(valid_ranks))]
-        total_weight = sum(weights)
-        weighted_avg = sum(r * w for r, w in zip(valid_ranks, weights)) / total_weight
+        # 使用最差年份（位次最大值）作为基准，避免趋势外推陷阱
+        # 这符合"历史趋势外推不可靠，稳妥线要按最坏年份位次定"的经验
+        worst_rank = max(valid_ranks)
 
-        return weighted_avg
+        # 如果有多年数据，取加权平均但偏向最差年份
+        if len(valid_ranks) > 1:
+            # 给最差年份额外权重
+            avg = sum(valid_ranks) / len(valid_ranks)
+            return avg * 0.4 + worst_rank * 0.6  # 偏保守
+        return worst_rank
 
     def calculate_admission_probability(
         self,
         user_rank: int,
         historical_avg_rank: float,
-        volatility: float = 0.05
     ) -> Tuple[float, str, str]:
         """
         计算录取概率
 
         Args:
-            user_rank: 用户排名
-            historical_avg_rank: 历史排名均值
-            volatility: 波动修正
+            user_rank: 用户排名（越小越好）
+            historical_avg_rank: 历史排名均值/最差值（越小越好）
 
         Returns:
             (概率, 档位, 说明)
         """
+        if not historical_avg_rank or historical_avg_rank <= 0:
+            return 0.0, "数据不足", "缺少历史录取位次数据"
+
         # 计算排名比值
-        rank_ratio = user_rank / historical_avg_rank if historical_avg_rank else 0
+        # ratio < 1: 考生位次更优（位次数字更小）→ 概率高
+        # ratio > 1: 考生位次更差（位次数字更大）→ 概率低
+        rank_ratio = user_rank / historical_avg_rank
+
+        # 极端高分段（考生位次远优于院校）
+        if rank_ratio < 0.10:
+            return 0.99, "保底", "位次远优于该院校历史录取线，录取概率极高"
 
         # 判断档位
         for level, (low, high) in self.LEVEL_THRESHOLDS.items():
             if low <= rank_ratio < high:
                 prob_low, prob_high = self.LEVEL_PROBABILITIES[level]
-                base_prob = (prob_low + prob_high) / 2
 
-                # 根据波动修正概率（仅在小范围内修正）
-                mid = (low + high) / 2
-                deviation = rank_ratio - mid
-                range_width = high - low
-                # 归一化偏差，限制在 [-1, 1] 范围内
-                normalized_dev = max(-1.0, min(1.0, deviation / (range_width / 2)))
-                probability = base_prob - volatility * normalized_dev * base_prob
+                # 在区间内线性插值
+                if high > low:
+                    t = (rank_ratio - low) / (high - low)
+                else:
+                    t = 0.5
 
-                # 确保 probability 在 [0, 1] 范围内
+                # 对于"冲刺"和"稳妥"，ratio 越小（位次越优），概率越高
+                # 对于"不建议"，ratio 越大（位次越差），概率越低
+                if level == "冲刺":
+                    probability = prob_high - t * (prob_high - prob_low)
+                elif level == "稳妥":
+                    probability = prob_high - t * (prob_high - prob_low)
+                elif level == "保底":
+                    probability = prob_high - t * (prob_high - prob_low)
+                else:  # 不建议
+                    probability = prob_low + t * (prob_high - prob_low)
+
                 probability = max(0.0, min(1.0, probability))
 
-                explanation = self._get_explanation(level, rank_ratio)
+                explanation = self._get_explanation(level, rank_ratio, historical_avg_rank)
                 return round(probability, 2), level, explanation
 
         # 超出范围
         if rank_ratio <= 0:
-            return 0.99, "保底", "排名远高于院校录取线，录取概率极高"
-        return 0.01, "不建议", "排名低于院校录取线，录取风险极大"
+            return 0.99, "保底", "位次远优于该院校历史录取线，录取概率极高"
+        return 0.01, "不建议", "位次远低于该院校历史录取线，录取风险极大"
 
-    def _get_explanation(self, level: str, rank_ratio: float) -> str:
+    def _get_explanation(self, level: str, rank_ratio: float, hist_rank: float) -> str:
         """生成说明"""
         ratio = round(rank_ratio, 2)
+        user_desc = f"您的位次约为历史录取位次的{ratio:.0%}"
         explanations = {
-            "冲刺": f"排名略高于院校历史录取线(比率{ratio:.2f})，有一定冲刺空间",
-            "稳妥": f"排名处于院校录取区间内(比率{ratio:.2f})，录取概率较高",
-            "保底": f"排名明显高于院校录取线(比率{ratio:.2f})，作为保底院校",
-            "不建议": f"排名低于院校录取线(比率{ratio:.2f})，录取风险较大"
+            "冲刺": f"{user_desc}，有一定冲刺空间，建议作为冲刺志愿",
+            "稳妥": f"{user_desc}，录取概率较高，建议作为核心志愿",
+            "保底": f"{user_desc}，作为保底院校较为稳妥",
+            "不建议": f"{user_desc}，录取概率较低，建议谨慎考虑"
         }
         return explanations.get(level, "")
 

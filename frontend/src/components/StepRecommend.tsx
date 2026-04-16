@@ -16,7 +16,7 @@ const LEVEL_TAB_MAP: Record<string, Tab> = {
   '冲刺': '冲刺',
   '稳妥': '稳妥',
   '保底': '保底',
-  '不建议': '保底',
+  '不建议': '冲刺',  // 不建议的院校仍可查看，归入冲刺（但标签会标红）
 }
 
 // 热门城市筛选
@@ -105,7 +105,7 @@ export default function StepRecommend() {
           '冲刺': 'border-orange-300 bg-orange-50',
           '稳妥': 'border-green-300 bg-green-50',
           '保底': 'border-blue-300 bg-blue-50',
-          '不建议': 'border-gray-200 bg-gray-50',
+          '不建议': 'border-red-200 bg-red-50',
           '数据不足': 'border-gray-200 bg-gray-50',
         }[prob.level] || 'border-gray-100 bg-white'
       : 'border-gray-100 bg-white'
@@ -115,7 +115,7 @@ export default function StepRecommend() {
           '冲刺': 'bg-orange-100 text-orange-600',
           '稳妥': 'bg-green-100 text-green-700',
           '保底': 'bg-blue-100 text-blue-600',
-          '不建议': 'bg-gray-100 text-gray-400',
+          '不建议': 'bg-red-100 text-red-600',
           '数据不足': 'bg-gray-100 text-gray-400',
         }[prob.level] || 'bg-gray-100 text-gray-400'
       : 'bg-gray-100 text-gray-400'
