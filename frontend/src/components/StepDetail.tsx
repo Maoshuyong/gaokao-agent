@@ -2,17 +2,13 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
 import { getCollegeDetail, getCollegeScores, calculateProbability, getScoreRank } from '@/api/client'
+import { getRankWithFallback } from '@/utils/helpers'
 import type { College, ScoreRecord } from '@/types'
-
-/** 经验公式降级 */
-function fallbackRank(score: number): number {
-  return Math.max(1, Math.round(300000 * Math.pow((750 - score) / 650, 2.5)))
-}
 
 export default function StepDetail() {
   const { code } = useParams<{ code: string }>()
   const navigate = useNavigate()
-  const { province, category, score, setStep } = useAppStore()
+  const { province, category, score, setStep, rankData, setRankData } = useAppStore()
   const [college, setCollege] = useState<College | null>(null)
   const [scores, setScores] = useState<ScoreRecord[]>([])
   const [prob, setProb] = useState<{ probability: number | null; level: string; explanation: string } | null>(null)
@@ -32,14 +28,15 @@ export default function StepDetail() {
         setCollege(collegeData)
         setScores(scoresData)
 
-        // 计算概率
+        // 计算概率（排名优先复用 store 缓存）
         if (score && province && category) {
           let rank: number
-          try {
-            const rankRes = await getScoreRank({ province: province!, category: category!, score: score! })
-            rank = rankRes.rank ?? fallbackRank(score!)
-          } catch {
-            rank = fallbackRank(score!)
+          if (rankData) {
+            rank = rankData.rank
+          } else {
+            const result = await getRankWithFallback(province!, category!, score!, getScoreRank)
+            rank = result.rank
+            setRankData({ rank, source: result.source })
           }
           const probRes = await calculateProbability({
             score: score!,

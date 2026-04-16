@@ -1,16 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
-import { generateReport, getScoreRank, type ReportResponse, type ReportCollege } from '@/api/client'
-
-/** 经验公式降级 */
-function fallbackRank(score: number): number {
-  return Math.max(1, Math.round(300000 * Math.pow((750 - score) / 650, 2.5)))
-}
+import { generateReport, type ReportResponse, type ReportCollege } from '@/api/client'
+import { getRankWithFallback } from '@/utils/helpers'
 
 export default function StepReport() {
   const navigate = useNavigate()
-  const { province, category, score, setStep } = useAppStore()
+  const { province, category, score, setStep, setRankData, setReportData } = useAppStore()
   const [report, setReport] = useState<ReportResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -21,15 +17,18 @@ export default function StepReport() {
 
     async function fetchReport() {
       try {
-        let rank: number
-        try {
-          const rankRes = await getScoreRank({ province, category, score })
-          rank = rankRes.rank ?? fallbackRank(score)
-        } catch {
-          rank = fallbackRank(score)
-        }
+        // 先获取排名（复用公共函数）
+        const { rank, source } = await getRankWithFallback(province, category, score, async (params) => {
+          const { getScoreRank } = await import('@/api/client')
+          return getScoreRank(params)
+        })
+        // 写入 store，后续组件可共享
+        setRankData({ rank, source })
+
         const data = await generateReport({ province, category, score, rank })
         setReport(data)
+        // 写入 store，StepChat 可直接读取
+        setReportData(data)
       } catch (err) {
         console.error(err)
       } finally {

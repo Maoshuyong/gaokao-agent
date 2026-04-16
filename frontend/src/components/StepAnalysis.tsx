@@ -2,15 +2,11 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
 import { recommendColleges, calculateProbability, getScoreRank } from '@/api/client'
-
-/** 经验公式降级（仅当 API 无数据时使用） */
-function fallbackRank(score: number): number {
-  return Math.max(1, Math.round(300000 * Math.pow((750 - score) / 650, 2.5)))
-}
+import { getRankWithFallback } from '@/utils/helpers'
 
 export default function StepAnalysis() {
   const navigate = useNavigate()
-  const { province, category, score, controlScores, setLoading, loading } = useAppStore()
+  const { province, category, score, controlScores, setLoading, loading, setRankData, rankData } = useAppStore()
   const [stats, setStats] = useState<{ total: number; chong: number; wen: number; bao: number } | null>(null)
   const [rank, setRank] = useState<number | null>(null)
   const [rankSource, setRankSource] = useState<'api' | 'estimate'>('estimate')
@@ -20,23 +16,21 @@ export default function StepAnalysis() {
 
     async function fetchAll() {
       try {
-        // 先获取真实排名
+        // 先获取排名（优先复用 store 缓存）
         let estimatedRank: number
-        try {
-          const rankRes = await getScoreRank({ province, category, score })
-          if (rankRes.rank) {
-            estimatedRank = rankRes.rank
-            setRank(rankRes.rank)
-            setRankSource(rankRes.method === 'exact' ? 'api' : 'estimate')
-          } else {
-            estimatedRank = fallbackRank(score)
-            setRank(estimatedRank)
-            setRankSource('estimate')
-          }
-        } catch {
-          estimatedRank = fallbackRank(score)
+        let source: 'api' | 'estimate' = 'estimate'
+        if (rankData) {
+          estimatedRank = rankData.rank
+          source = rankData.source
           setRank(estimatedRank)
-          setRankSource('estimate')
+          setRankSource(source)
+        } else {
+          const result = await getRankWithFallback(province, category, score, getScoreRank)
+          estimatedRank = result.rank
+          source = result.source
+          setRankData({ rank: estimatedRank, source })
+          setRank(estimatedRank)
+          setRankSource(source)
         }
 
         const res = await recommendColleges({

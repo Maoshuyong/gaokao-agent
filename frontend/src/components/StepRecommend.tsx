@@ -2,12 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
 import { recommendColleges, calculateProbability, getScoreRank } from '@/api/client'
+import { getRankWithFallback } from '@/utils/helpers'
 import type { College } from '@/types'
-
-/** 经验公式降级 */
-function fallbackRank(score: number): number {
-  return Math.max(1, Math.round(300000 * Math.pow((750 - score) / 650, 2.5)))
-}
 
 const TABS = ['全部', '冲刺', '稳妥', '保底'] as const
 type Tab = (typeof TABS)[number]
@@ -24,7 +20,7 @@ const CITY_FILTERS = ['全部', '北京', '上海', '江苏', '浙江', '广东'
 
 export default function StepRecommend() {
   const navigate = useNavigate()
-  const { province, category, score, setColleges, colleges, totalColleges, probabilityMap, setProbability, setStep, loading, setLoading } = useAppStore()
+  const { province, category, score, setColleges, colleges, totalColleges, probabilityMap, setProbability, setStep, loading, setLoading, rankData, setRankData } = useAppStore()
   const [activeTab, setActiveTab] = useState<Tab>('全部')
   const [page, setPage] = useState(1)
   const [filter985, setFilter985] = useState(false)
@@ -36,12 +32,14 @@ export default function StepRecommend() {
     setLoading(true)
     try {
       setStep(3)
+      // 获取排名（优先复用 store 缓存）
       let rank: number
-      try {
-        const rankRes = await getScoreRank({ province, category, score })
-        rank = rankRes.rank ?? fallbackRank(score)
-      } catch {
-        rank = fallbackRank(score)
+      if (rankData) {
+        rank = rankData.rank
+      } else {
+        const result = await getRankWithFallback(province, category, score, getScoreRank)
+        rank = result.rank
+        setRankData({ rank, source: result.source })
       }
       const res = await recommendColleges({
         province,
