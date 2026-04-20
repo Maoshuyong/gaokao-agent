@@ -108,6 +108,19 @@ async def search_colleges(
     ]
 
 
+@router.get("/meta/available-provinces")
+async def get_available_provinces(db: Session = Depends(get_db)):
+    """获取有分数线数据的省份列表（供前端省份切换）"""
+    from sqlalchemy import func, text
+    rows = db.execute(
+        text("SELECT province, COUNT(*) as cnt FROM scores WHERE province != '' GROUP BY province ORDER BY cnt DESC")
+    ).fetchall()
+    return {
+        "provinces": [{"name": r[0], "count": r[1]} for r in rows],
+        "total": len(rows)
+    }
+
+
 @router.get("/{code}", response_model=CollegeResponse)
 async def get_college(code: str, db: Session = Depends(get_db)):
     """获取院校详情"""
