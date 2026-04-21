@@ -38,14 +38,41 @@ PROVINCE_URLS_2024 = {
     '浙江': 'https://www.gk100.com/read_49153069.htm',
 }
 
-# 2023年URL（需要在gk100上搜索确认）
-PROVINCE_URLS_2023 = {
-    # 待补充
+# 2025年各省一分一段表URL（来自 gk100.com 汇总页）
+PROVINCE_URLS_2025 = {
+    '陕西': 'https://www.gk100.com/read_28557842.htm',
+    '河南': 'https://www.gk100.com/read_31698432.htm',
+    '四川': 'https://www.gk100.com/read_16043396.htm',
+    '广东': 'https://www.gk100.com/read_25156719.htm',
+    '湖北': 'https://www.gk100.com/read_38500828.htm',
+    '湖南': 'https://www.gk100.com/read_26730911.htm',
+    '山东': 'https://www.gk100.com/read_87543320.htm',
+    '江苏': 'https://www.gk100.com/read_39182493.htm',
+    '河北': 'https://www.gk100.com/read_39804881.htm',
+    '安徽': 'https://www.gk100.com/read_31856773.htm',
+    '浙江': 'https://www.gk100.com/read_29320598.htm',
 }
 
-# 2022年URL
+# 2023年URL（来自 gk100.com 汇总页）
+PROVINCE_URLS_2023 = {
+    '陕西': 'https://www.gk100.com/read_6087605.htm',
+    '河南': 'https://www.gk100.com/read_10249489.htm',
+    '四川': 'https://www.gk100.com/read_11899973.htm',
+    '广东': 'https://www.gk100.com/read_33573327.htm',
+    '湖北': 'https://www.gk100.com/read_34678179.htm',
+    '湖南': 'https://www.gk100.com/read_12721662.htm',
+    '山东': 'https://www.gk100.com/read_3215012.htm',
+    '江苏': 'https://www.gk100.com/read_12667612.htm',
+    '河北': 'https://www.gk100.com/read_10764001.htm',
+    '安徽': 'https://www.gk100.com/read_12985434.htm',
+    '浙江': 'https://www.gk100.com/read_34147924.htm',
+}
+
+# 2022年URL（部分确认，需补充）
 PROVINCE_URLS_2022 = {
-    # 待补充
+    '陕西': 'https://www.gk100.com/read_68161.htm',
+    '山东': 'https://www.gk100.com/read_66758.htm',
+    # 其余省份待搜索补充
 }
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'score_rank_data')
@@ -450,6 +477,7 @@ def detect_page_type(url):
 def crawl_all_provinces(year=2024):
     """爬取所有省份的一分一段表"""
     urls_map = {
+        2025: PROVINCE_URLS_2025,
         2024: PROVINCE_URLS_2024,
         2023: PROVINCE_URLS_2023,
         2022: PROVINCE_URLS_2022,

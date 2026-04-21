@@ -32,11 +32,17 @@ async def generate_report(
     """
     scoring = ScoringService(db)
 
-    # ========== 1. 省控线 ==========
+    # ========== 1. 省控线（取最近有数据的年份） ==========
+    max_year = db.query(func.max(Score.year)).filter(
+        Score.province == province,
+        Score.control_score.isnot(None)
+    ).scalar() or 2024
+
     control_scores = db.query(Score).filter(
         Score.province == province,
-        Score.year == 2024
-    ).distinct(Score.category, Score.batch).all()
+        Score.year == max_year,
+        Score.control_score.isnot(None)
+    ).all()
 
     control_map = {}
     for s in control_scores:
@@ -48,7 +54,10 @@ async def generate_report(
                 "score": s.control_score
             }
 
+    # 兼容传统高考（本科一批/二批）和新高考（本科批）
     yiben_score = control_map.get(f"{category}_本科一批", {}).get("score")
+    if not yiben_score:
+        yiben_score = control_map.get(f"{category}_本科批", {}).get("score")
     erben_score = control_map.get(f"{category}_本科二批", {}).get("score")
     yiben_diff = score - yiben_score if yiben_score else None
     erben_diff = score - erben_score if erben_score else None

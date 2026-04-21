@@ -81,34 +81,37 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"院校数据自动填充异常: {e}")
 
-    # 自动填充一分一段表（仅当数据为空时）
+    # 自动填充一分一段表
     try:
         from db import SessionLocal
         from models.score_rank_table import ScoreRankTable
+        from sqlalchemy import func as sa_func
         db = SessionLocal()
         count = db.query(ScoreRankTable).count()
+        # 检查是否有多年度数据（旧版只有 2024）
+        years = [r[0] for r in db.query(ScoreRankTable.year).distinct().all()]
         db.close()
-        if count == 0:
-            logger.info("一分一段表为空，开始填充种子数据...")
+
+        need_seed = (count == 0) or (len(years) < 3)
+        if need_seed:
+            reason = "为空" if count == 0 else f"仅有 {years}，需升级"
+            logger.info(f"一分一段表{reason}，开始填充种子数据...")
             import subprocess
-            # 优先从 CSV 导入，失败则从 JSON 回退
             seed_script = "seed_score_rank_csv.py"
             seed_args = [sys.executable, seed_script, "--from-csv"]
-            # 如果 CSV 目录为空，则回退到 JSON
             csv_dir = Path(__file__).parent / "score_rank_data"
-            csv_files = list(csv_dir.glob("2024_*.csv")) if csv_dir.exists() else []
+            csv_files = list(csv_dir.glob("20*.csv")) if csv_dir.exists() else []
             if not csv_files:
                 json_file = Path(__file__).parent / "seed_score_rank_data.json"
                 if json_file.exists():
                     seed_args = [sys.executable, seed_script, "--from-json"]
                 else:
-                    # 最后回退到旧的硬编码脚本
                     seed_script = "seed_score_rank.py"
                     seed_args = [sys.executable, seed_script]
 
             result = subprocess.run(
                 seed_args,
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, timeout=180,
                 cwd=str(Path(__file__).parent)
             )
             if result.returncode == 0:
@@ -116,9 +119,37 @@ async def startup_event():
             else:
                 logger.warning(f"一分一段表种子数据填充失败: {result.stderr.strip()}")
         else:
-            logger.info(f"一分一段表已有 {count} 条数据，跳过填充")
+            logger.info(f"一分一段表已有 {count} 条数据 ({years}年)，跳过填充")
     except Exception as e:
         logger.warning(f"一分一段表自动填充异常: {e}")
+
+    # 自动填充省控线（检查覆盖率，低于 80% 则重新填充）
+    try:
+        from db import SessionLocal
+        from models.score import Score
+        from sqlalchemy import func as sa_func
+        db = SessionLocal()
+        total = db.query(Score).count()
+        filled = db.query(Score).filter(Score.control_score.isnot(None)).count()
+        db.close()
+
+        need_fill = (total > 0 and filled / total < 0.8) or filled == 0
+        if need_fill:
+            logger.info(f"省控线覆盖率 {filled}/{total}，开始填充...")
+            import subprocess
+            result = subprocess.run(
+                [sys.executable, "fill_control_scores.py"],
+                capture_output=True, text=True, timeout=120,
+                cwd=str(Path(__file__).parent)
+            )
+            if result.returncode == 0:
+                logger.info(f"省控线填充成功: {result.stdout.strip()}")
+            else:
+                logger.warning(f"省控线填充失败: {result.stderr.strip()}")
+        else:
+            logger.info(f"省控线覆盖率 {filled}/{total} ({filled*100//total}%)，跳过填充")
+    except Exception as e:
+        logger.warning(f"省控线自动填充异常: {e}")
 
 
 @app.get("/")
