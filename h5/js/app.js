@@ -1,0 +1,988 @@
+// 高报专家 H5 - WorkBuddy Agent 版
+// LLM 后端：WorkBuddy Agent（替代原 QClaw 网关）
+
+// ─── API 配置 ───────────────────────────────────────────
+// server.js 统一代理，前端始终用同源相对路径
+const API_CONFIG = {
+    baseURL: '',          // 同源，server.js 负责转发到 WorkBuddy Agent
+    token: 'gkzhuanye2026'
+};
+
+console.log('高报专家 H5 已启动（WorkBuddy Agent 版）');
+
+// ─── 状态管理 ────────────────────────────────────────────
+const state = {
+    isLoggedIn: false,
+    user: null,
+    messages: [],       // { role: 'user'|'assistant', content: string }
+    usageCount: 0,
+    maxUsage: Infinity,
+    province: '',        // 当前选中的考生省份
+    category: '',        // 当前选中的科类（文科/理科/物理类/历史类）
+    mbti: null           // MBTI 测试结果 { type, name, tags, majors, desc }
+};
+
+// ─── 页面元素 ────────────────────────────────────────────
+const pages = {
+    login: document.getElementById('login-page'),
+    home:  document.getElementById('home-page'),
+    chat:  document.getElementById('chat-page'),
+    report: document.getElementById('report-page'),
+    member: document.getElementById('member-page'),
+    mbti:  document.getElementById('mbti-page')
+};
+
+// ─── 页面切换 ────────────────────────────────────────────
+function showPage(pageName) {
+    Object.values(pages).forEach(p => p.classList.remove('active'));
+    pages[pageName].classList.add('active');
+    if (pageName === 'chat') {
+        checkConnection();
+    }
+}
+
+// ─── 登录逻辑 ────────────────────────────────────────────
+const phoneInput   = document.getElementById('phone');
+const codeInput    = document.getElementById('code');
+const sendCodeBtn  = document.getElementById('send-code');
+const loginBtn     = document.getElementById('login-btn');
+const guestLoginBtn = document.getElementById('guest-login');
+
+// 发送验证码（倒计时 UI，后端 TODO）
+let countdown = 0;
+sendCodeBtn?.addEventListener('click', () => {
+    const phone = phoneInput.value;
+    if (!/^1\d{10}$/.test(phone)) { alert('请输入正确的手机号'); return; }
+    countdown = 60;
+    sendCodeBtn.disabled = true;
+    const timer = setInterval(() => {
+        countdown--;
+        sendCodeBtn.textContent = `${countdown}s`;
+        if (countdown <= 0) {
+            clearInterval(timer);
+            sendCodeBtn.disabled = false;
+            sendCodeBtn.textContent = '获取验证码';
+        }
+    }, 1000);
+    console.log('TODO: 调用短信 API 发送验证码到', phone);
+});
+
+// 手机号登录（当前为模拟，TODO: 接真实验证）
+loginBtn?.addEventListener('click', () => {
+    const phone = phoneInput.value;
+    const code  = codeInput.value;
+    if (!/^1\d{10}$/.test(phone)) { alert('请输入正确的手机号'); return; }
+    if (!/^\d{6}$/.test(code))    { alert('请输入6位验证码'); return; }
+    doLogin({ phone, name: phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') });
+});
+
+// 体验入口（无需登录）
+guestLoginBtn?.addEventListener('click', () => {
+    doLogin({ phone: 'guest', name: '体验用户' });
+});
+
+function doLogin(user) {
+    state.isLoggedIn = true;
+    state.user = user;
+    localStorage.setItem('gaokao_user', JSON.stringify(user));
+    updateUserUI();
+    showPage('home');
+}
+
+function updateUserUI() {
+    if (!state.user) return;
+    const name = state.user.name || state.user.phone;
+    const greetEl   = document.getElementById('greeting-text');
+    const statusEl  = document.getElementById('user-status-text');
+    const memberEl  = document.getElementById('member-name-text');
+    if (greetEl)  greetEl.textContent  = `Hi，${name}`;
+    if (memberEl) memberEl.textContent = name;
+}
+
+function updateUsageUI() {
+    const pct = Math.min((state.usageCount / state.maxUsage) * 100, 100);
+    const progressEl = document.getElementById('usage-progress');
+    const usedEl     = document.getElementById('usage-used-text');
+    const remainEl   = document.getElementById('usage-remain-text');
+    const statUsed   = document.getElementById('stat-used');
+    if (progressEl) progressEl.style.width = pct + '%';
+    if (usedEl)     usedEl.textContent  = `已使用 ${state.usageCount} 次`;
+    if (remainEl)   remainEl.textContent = `剩余 ${Math.max(state.maxUsage - state.usageCount, 0)} 次`;
+    if (statUsed)   statUsed.textContent = state.usageCount;
+}
+
+// ─── 省份选择（首页面板） ──────────────────────────────────
+const quickProvinceSelect = document.getElementById('quick-province');
+
+const PROVINCES = [
+    '陕西','河南','广东','四川','湖北','湖南','山东','江苏','河北','安徽','浙江',
+    '北京','上海','天津','重庆','福建','江西','山西','辽宁','吉林','黑龙江',
+    '内蒙古','广西','海南','贵州','云南','西藏','甘肃','青海','宁夏','新疆'
+];
+
+function initProvinceSelect() {
+    if (!quickProvinceSelect) return;
+    PROVINCES.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        quickProvinceSelect.appendChild(opt);
+    });
+    // 恢复上次选择
+    const saved = localStorage.getItem('gaokao_province');
+    if (saved) {
+        state.province = saved;
+        quickProvinceSelect.value = saved;
+    }
+}
+
+quickProvinceSelect?.addEventListener('change', () => {
+    state.province = quickProvinceSelect.value;
+    localStorage.setItem('gaokao_province', state.province);
+    console.log('省份切换:', state.province || '未选择');
+});
+
+// ─── 科类选择（首页面板） ──────────────────────────────────
+const quickCategorySelect = document.getElementById('quick-category');
+
+quickCategorySelect?.addEventListener('change', () => {
+    state.category = quickCategorySelect.value;
+    localStorage.setItem('gaokao_category', state.category);
+    console.log('科类切换:', state.category || '未选择');
+});
+
+// ─── 开始咨询 ────────────────────────────────────────────
+document.getElementById('start-chat')?.addEventListener('click', () => {
+    // 必填校验
+    if (!state.province) {
+        alert('请先选择考生省份');
+        quickProvinceSelect?.focus();
+        return;
+    }
+    if (!state.category) {
+        alert('请先选择文/理科');
+        quickCategorySelect?.focus();
+        return;
+    }
+
+    showPage('chat');
+
+    // 如果用户在首页填了分数/位次，自动发送为第一条消息
+    const score = document.getElementById('quick-score')?.value?.trim();
+    const rank = document.getElementById('quick-rank')?.value?.trim();
+
+    if (score || rank || state.mbti) {
+        let infoMsg = '';
+        if (state.mbti) {
+            infoMsg += `我的MBTI是${state.mbti.type}（${state.mbti.name}）`;
+        }
+        if (score || rank) {
+            if (infoMsg) infoMsg += '，';
+            infoMsg += '我的成绩信息：';
+            if (score) infoMsg += `高考${score}分`;
+            if (rank) infoMsg += `，省排名${Number(rank).toLocaleString()}名`;
+            if (score && !rank) infoMsg += '，但我不知道位次';
+            if (!score && rank) infoMsg += '，但我不知道具体分数';
+        }
+        if (infoMsg) infoMsg += `（${state.province}${state.category}）`;
+
+        // 延迟 300ms 发送，让页面切换动画完成
+        setTimeout(() => dispatchMessage(infoMsg), 300);
+    }
+});
+
+// ─── 对话核心 ────────────────────────────────────────────
+const messagesContainer = document.getElementById('messages');
+const userInput = document.getElementById('user-input');
+
+// 调用 LLM（SSE 流式）
+async function callLLM(userMessage, onChunk, onStatus) {
+    // 把用户消息追加到历史
+    state.messages.push({ role: 'user', content: userMessage });
+
+    const payload = {
+        model: 'default',
+        messages: state.messages,
+        stream: true,   // 启用流式
+        max_tokens: 4000,
+        temperature: 0.7
+    };
+    if (state.province) payload.province = state.province;
+    if (state.category) payload.category = state.category;
+
+    const response = await fetch(`${API_CONFIG.baseURL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${API_CONFIG.token}`
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errText.substring(0, 200)}`);
+    }
+
+    // SSE 解析
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = '';
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // 保留不完整的行
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+            const dataStr = trimmed.slice(6);
+            if (dataStr === '[DONE]') continue;
+
+            try {
+                const parsed = JSON.parse(dataStr);
+
+                // tool_status 事件：显示工具调用进度
+                if (parsed.type === 'tool_status' && onStatus) {
+                    onStatus(parsed.content);
+                    continue;
+                }
+
+                // done 事件
+                if (parsed.type === 'done') {
+                    continue;
+                }
+
+                // 标准 SSE chunk
+                const delta = parsed.choices?.[0]?.delta?.content;
+                if (delta) {
+                    fullContent += delta;
+                    if (onChunk) onChunk(fullContent);
+                }
+            } catch (e) {
+                // 忽略非 JSON 行
+            }
+        }
+    }
+
+    // 流结束后保存完整回复
+    if (fullContent) {
+        state.messages.push({ role: 'assistant', content: fullContent });
+    }
+    return fullContent || '（无回复）';
+}
+
+// 发送消息（来自输入框）
+async function sendMessage() {
+    const text = userInput.value.trim();
+    if (!text) return;
+    userInput.value = '';
+    userInput.style.height = 'auto';
+    await dispatchMessage(text);
+}
+
+// 快捷按钮（欢迎语区的，保留兼容）
+async function sendQuickReply(text) {
+    document.querySelector('.quick-replies')?.remove();
+    await dispatchMessage(text);
+}
+
+// ─── 常驻快捷按钮栏 ─────────────────────────────────────
+const QUICK_ACTIONS = {
+    // 初始按钮（未填成绩时）
+    initial: [
+        { text: '帮我查位次', style: 'qa-primary', msg: '帮我查一下位次对应什么分数' },
+        { text: '能上什么大学', style: 'qa-primary', msg: '根据我的成绩，能上什么层次的大学？' },
+        { text: '一分一段表', style: 'qa-data', msg: '帮我查一分一段表' },
+        { text: '志愿填报策略', style: 'qa-advice', msg: '教我志愿填报的策略，怎么冲稳保搭配？' },
+        { text: '推荐专业', style: 'qa-advice', msg: '帮我推荐适合我的专业方向' },
+        { text: '中外合作办学', style: 'qa-data', msg: '介绍一下中外合作办学，哪些值得考虑？' },
+        { text: '了解MBTI', style: 'qa-advice', msg: '我想通过MBTI测试了解自己适合什么专业' },
+    ],
+    // 已知成绩后的按钮
+    withScore: [
+        { text: '录取概率', style: 'qa-primary', msg: '帮我算一下录取概率' },
+        { text: '冲稳保方案', style: 'qa-primary', msg: '帮我制定冲稳保志愿方案' },
+        { text: '查院校分数线', style: 'qa-data', msg: '帮我查某所院校的历年录取分数' },
+        { text: '位次换算', style: 'qa-data', msg: '帮我做位次和分数的换算' },
+        { text: '省控线', style: 'qa-data', msg: '查一下历年省控线' },
+        { text: '志愿填报策略', style: 'qa-advice', msg: '教我志愿填报的策略，怎么冲稳保搭配？' },
+        { text: '专业推荐', style: 'qa-advice', msg: '根据我的成绩推荐一些专业' },
+    ]
+};
+
+let currentActionSet = 'initial';
+
+function renderQuickActions() {
+    const container = document.getElementById('quick-actions');
+    if (!container) return;
+
+    // 根据是否有成绩数据切换按钮组
+    const score = document.getElementById('quick-score')?.value?.trim();
+    const rank = document.getElementById('quick-rank')?.value?.trim();
+    // 也检查消息历史里是否有成绩信息
+    const hasScoreInChat = state.messages.some(m =>
+        m.content.match(/\d+分/) || m.content.match(/\d+名/));
+    const actionKey = (score || rank || hasScoreInChat) ? 'withScore' : 'initial';
+    currentActionSet = actionKey;
+
+    const actions = QUICK_ACTIONS[actionKey];
+    container.innerHTML = actions.map(a =>
+        `<button class="qa-btn ${a.style}" onclick="handleQuickAction(this)" data-msg="${a.msg.replace(/"/g, '&quot;')}">${a.text}</button>`
+    ).join('');
+}
+
+async function handleQuickAction(btn) {
+    const msg = btn.dataset.msg;
+    if (!msg) return;
+    await dispatchMessage(msg);
+    // 刷新按钮组（可能切换到 withScore）
+    renderQuickActions();
+}
+
+// 初始化渲染
+renderQuickActions();
+
+// 统一分发入口
+async function dispatchMessage(text) {
+    if (state.usageCount >= state.maxUsage) {
+        alert('免费对话次数已用完，请升级会员继续使用。');
+        return;
+    }
+
+    addMessage(text, 'user');
+    state.usageCount++;
+    updateUsageUI();
+    persistState();
+
+    // 创建流式消息容器（先显示 loading 状态）
+    const botMsgEl = addStreamingMessage('正在分析你的信息...');
+    document.getElementById('send-btn').disabled = true;
+
+    try {
+        const reply = await callLLM(
+            text,
+            // onChunk: 每收到一段文本就更新渲染
+            (partialContent) => {
+                updateStreamingMessage(botMsgEl, partialContent);
+            },
+            // onStatus: 工具调用状态更新
+            (statusText) => {
+                updateStreamingStatus(botMsgEl, statusText);
+            }
+        );
+        // 流结束，将消息固定为最终版本
+        finalizeStreamingMessage(botMsgEl, reply);
+    } catch (err) {
+        console.error('LLM 调用失败:', err);
+        finalizeStreamingMessage(botMsgEl, `⚠️ 服务暂时不可用，请稍后再试。\n（${err.message}）`);
+    } finally {
+        document.getElementById('send-btn').disabled = false;
+        renderQuickActions(); // 刷新快捷按钮（可能切换按钮组）
+    }
+}
+
+// 渲染消息气泡
+function addMessage(text, role, isLoading = false) {
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `message ${role}`;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.textContent = role === 'user' ? '👤' : '🎓';
+
+    const content = document.createElement('div');
+    content.className = 'msg-content';
+
+    if (isLoading) {
+        content.innerHTML = '<p class="loading-dots">思考中<span>.</span><span>.</span><span>.</span></p>';
+    } else {
+        content.innerHTML = `<div class="md-content">${renderMarkdown(text)}</div>`;
+    }
+
+    msgDiv.appendChild(avatar);
+    msgDiv.appendChild(content);
+    messagesContainer.appendChild(msgDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    return msgDiv;
+}
+
+// ─── Markdown → HTML 渲染（统一函数） ───────────────────────
+function renderMarkdown(text) {
+    if (!text) return '';
+    const raw = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    // 按行分块处理
+    const lines = raw.split('\n');
+    const blocks = [];  // { type: 'table'|'list-ul'|'list-ol'|'heading'|'hr'|'quote'|'empty', content: string }
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // 空行 → 段落分隔
+        if (!line.trim()) {
+            blocks.push({ type: 'empty' });
+            i++;
+            continue;
+        }
+
+        // 表格：| 开头，连续行组成完整表格
+        if (line.trim().startsWith('|')) {
+            let tableLines = [];
+            while (i < lines.length && lines[i].trim().startsWith('|')) {
+                tableLines.push(lines[i]);
+                i++;
+            }
+            // 至少需要表头 + 分隔线
+            if (tableLines.length >= 2 && /^\|[\s-:|]+\|$/.test(tableLines[1].trim())) {
+                const headers = tableLines[0].split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
+                const rows = tableLines.slice(2).map(row => {
+                    const cells = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
+                    return `<tr>${cells}</tr>`;
+                }).join('');
+                blocks.push({ type: 'table', content: `<table class="data-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>` });
+            } else {
+                blocks.push({ type: 'para', content: tableLines.join('<br>') });
+            }
+            continue;
+        }
+
+        // 分割线
+        if (/^---+$/.test(line.trim()) || /^\*\*\*+$/.test(line.trim())) {
+            blocks.push({ type: 'hr' });
+            i++;
+            continue;
+        }
+
+        // 标题
+        const headingMatch = line.match(/^(#{1,4})\s+(.+)$/);
+        if (headingMatch) {
+            const level = Math.min(headingMatch[1].length, 4);
+            blocks.push({ type: 'heading', content: `<h${level + 1}>${headingMatch[2]}</h${level + 1}>` });
+            i++;
+            continue;
+        }
+
+        // 引用块 >
+        if (line.trim().startsWith('>')) {
+            let quoteLines = [];
+            while (i < lines.length && lines[i].trim().startsWith('>')) {
+                quoteLines.push(lines[i].replace(/^>\s?/, ''));
+                i++;
+            }
+            blocks.push({ type: 'quote', content: `<blockquote>${quoteLines.join('<br>')}</blockquote>` });
+            continue;
+        }
+
+        // 无序列表 - 连续的 - 开头
+        if (/^- /.test(line.trim())) {
+            let items = [];
+            while (i < lines.length && /^- /.test(lines[i].trim())) {
+                items.push(lines[i].replace(/^-\s+/, ''));
+                i++;
+            }
+            const lis = items.map(item => `<li>${item}</li>`).join('');
+            blocks.push({ type: 'list', content: `<ul>${lis}</ul>` });
+            continue;
+        }
+
+        // 有序列表 1. 2. 3.
+        if (/^\d+\.\s/.test(line.trim())) {
+            let items = [];
+            while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+                items.push(lines[i].replace(/^\d+\.\s+/, ''));
+                i++;
+            }
+            const lis = items.map(item => `<li>${item}</li>`).join('');
+            blocks.push({ type: 'list', content: `<ol>${lis}</ol>` });
+            continue;
+        }
+
+        // 普通段落：收集连续非空非特殊行
+        let paraLines = [];
+        while (i < lines.length && lines[i].trim() &&
+               !lines[i].trim().startsWith('|') &&
+               !lines[i].trim().startsWith('>') &&
+               !/^(#{1,4}\s|---+$|\*\*\*+$|- |\d+\.\s)/.test(lines[i].trim())) {
+            paraLines.push(lines[i]);
+            i++;
+        }
+        if (paraLines.length > 0) {
+            // 行内格式：粗体、斜体、行内代码
+            let content = paraLines.join('<br>')
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                .replace(/`(.+?)`/g, '<code>$1</code>');
+            blocks.push({ type: 'para', content });
+        }
+    }
+
+    // 组装 HTML
+    let html = '';
+    for (const block of blocks) {
+        switch (block.type) {
+            case 'table':
+                html += `<div class="table-wrap">${block.content}</div>`;
+                break;
+            case 'heading':
+            case 'list':
+            case 'hr':
+            case 'quote':
+                html += block.content;
+                break;
+            case 'para':
+                html += `<p>${block.content}</p>`;
+                break;
+            case 'empty':
+                break;
+        }
+    }
+    return html;
+}
+
+// 创建流式消息气泡
+function addStreamingMessage(initialStatus) {
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'message bot';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.textContent = '🎓';
+
+    const content = document.createElement('div');
+    content.className = 'msg-content streaming';
+
+    // 状态指示区
+    const statusEl = document.createElement('div');
+    statusEl.className = 'stream-status';
+    statusEl.innerHTML = `<span class="status-text">${initialStatus}</span>`;
+    content.appendChild(statusEl);
+
+    // 内容区（初始隐藏）
+    const textEl = document.createElement('div');
+    textEl.className = 'stream-text md-content';
+    textEl.style.display = 'none';
+    content.appendChild(textEl);
+
+    // 光标
+    const cursor = document.createElement('span');
+    cursor.className = 'stream-cursor';
+    cursor.textContent = '▊';
+    cursor.style.display = 'none';
+    content.appendChild(cursor);
+
+    msgDiv.appendChild(avatar);
+    msgDiv.appendChild(content);
+    messagesContainer.appendChild(msgDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // 存储引用
+    msgDiv._statusEl = statusEl;
+    msgDiv._textEl = textEl;
+    msgDiv._cursorEl = cursor;
+    return msgDiv;
+}
+
+// 更新工具调用状态
+function updateStreamingStatus(msgEl, statusText) {
+    if (!msgEl || !msgEl._statusEl) return;
+    msgEl._statusEl.querySelector('.status-text').textContent = statusText;
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// 更新流式文本内容
+function updateStreamingMessage(msgEl, partialContent) {
+    if (!msgEl) return;
+    const statusEl = msgEl._statusEl;
+    const textEl = msgEl._textEl;
+    const cursor = msgEl._cursorEl;
+
+    // 隐藏状态，显示文本
+    if (statusEl) statusEl.style.display = 'none';
+    if (textEl) {
+        textEl.style.display = 'block';
+        textEl.innerHTML = renderMarkdown(partialContent);
+    }
+    if (cursor) cursor.style.display = 'inline';
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// 流结束，固定最终内容
+function finalizeStreamingMessage(msgEl, finalContent) {
+    if (!msgEl) return;
+    const statusEl = msgEl._statusEl;
+    const textEl = msgEl._textEl;
+    const cursor = msgEl._cursorEl;
+    const content = msgEl.querySelector('.msg-content');
+
+    // 移除 streaming 类（停止动画）
+    if (content) content.classList.remove('streaming');
+
+    // 隐藏状态和光标
+    if (statusEl) statusEl.remove();
+    if (cursor) cursor.remove();
+
+    // 渲染最终完整 Markdown
+    if (textEl) {
+        textEl.style.display = 'block';
+        textEl.innerHTML = renderMarkdown(finalContent);
+    }
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// 清空对话
+function clearChat() {
+    if (!confirm('确定清空对话记录？')) return;
+    state.messages = [];
+    state.usageCount = 0;
+    updateUsageUI();
+    persistState();
+    // 重置聊天界面
+    messagesContainer.innerHTML = `
+        <div class="message bot">
+            <div class="msg-avatar">🎓</div>
+            <div class="msg-content">
+                <p>你好！我是高报专家 🎓</p>
+                <p>在开始之前，我想先了解一下：</p>
+                <p><strong>你是考生本人，还是家长？</strong></p>
+            </div>
+        </div>
+        <div class="quick-replies">
+            <button class="quick-btn" onclick="sendQuickReply('我是考生')">我是考生</button>
+            <button class="quick-btn" onclick="sendQuickReply('我是家长')">我是家长</button>
+        </div>`;
+}
+
+// ─── 报告生成 ──────────────────────────────────────────────
+let reportGenerating = false;
+
+async function generateReport() {
+    if (reportGenerating) {
+        showPage('report');
+        return;
+    }
+
+    // 至少要有对话记录
+    if (state.messages.length < 2) {
+        alert('请先和 AI 专家聊几句你的情况，再来生成报告');
+        showPage('chat');
+        return;
+    }
+
+    reportGenerating = true;
+    showPage('report');
+
+    // 切换到报告内容视图
+    document.getElementById('report-empty').style.display = 'none';
+    document.getElementById('report-content').style.display = 'block';
+
+    // 填充封面
+    const province = state.province || '未知';
+    const category = state.category || '未知';
+    document.getElementById('cover-title').textContent =
+        `${province}${category} 志愿分析报告`;
+    document.getElementById('cover-province').textContent = province;
+    document.getElementById('cover-category').textContent = category;
+    document.getElementById('cover-date').textContent =
+        new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+
+    // 重置流式区域
+    const statusEl = document.getElementById('report-status');
+    const textEl = document.getElementById('report-text');
+    statusEl.style.display = 'flex';
+    statusEl.querySelector('.status-text').textContent = '正在分析对话记录并生成报告...';
+    textEl.style.display = 'none';
+    textEl.innerHTML = '';
+
+    // 构建报告专用 prompt
+    const reportPrompt = buildReportPrompt();
+
+    try {
+        await callLLMForReport(
+            reportPrompt,
+            // onChunk: 实时渲染报告文本
+            (partialContent) => {
+                statusEl.style.display = 'none';
+                textEl.style.display = 'block';
+                textEl.innerHTML = renderMarkdown(partialContent);
+                document.getElementById('report-body').scrollTop = document.getElementById('report-body').scrollHeight;
+            },
+            // onStatus: 工具调用状态
+            (statusText) => {
+                statusEl.querySelector('.status-text').textContent = statusText;
+            }
+        );
+        // 报告生成完毕
+        statusEl.style.display = 'none';
+    } catch (err) {
+        console.error('报告生成失败:', err);
+        statusEl.style.display = 'none';
+        textEl.style.display = 'block';
+        textEl.innerHTML = `<p>⚠️ 报告生成失败：${err.message}</p><p>请返回对话页继续聊天后再试</p>`;
+    } finally {
+        reportGenerating = false;
+    }
+}
+
+function buildReportPrompt() {
+    // 从对话历史中提取关键信息
+    const chatHistory = state.messages
+        .map(m => `${m.role === 'user' ? '用户' : '专家'}：${m.content}`)
+        .join('\n\n');
+
+    return `请根据以下对话记录，生成一份完整的高考志愿分析报告。
+
+## 报告要求
+
+请严格按以下结构生成 Markdown 格式报告：
+
+### 1. 📋 考生画像
+用表格汇总：省份、科类、高考分数、省排名、超线情况、成绩定位
+
+### 2. 💡 核心判断
+基于数据给出 2-3 条关键判断（如：能上什么层次、地域选择空间、专业重要性）
+
+### 3. ⚠️ 重要预警
+基于真实数据指出风险（如位次暴涨的院校、招生人数少的陷阱）
+
+### 4. 🎯 志愿方案
+
+**冲刺志愿（位次比你高1000-3000名）**
+用表格：院校名 | 标签 | 城市 | 近三年位次 | 招生人数 | 推荐专业 | 风险提示
+冲刺总结
+
+**稳妥志愿（位次±1500名）**
+用表格：院校名 | 标签 | 城市 | 近三年位次 | 招生人数 | 推荐专业 | 安全余量
+按安全性排序
+
+**保底志愿（位次比你低1500名以上）**
+用表格同上
+
+### 5. 📊 位次趋势分析
+关键院校近三年位次变化（用表格），标注暴涨/暴跌
+
+### 6. 🎯 专业建议
+结合考生情况推荐 3-5 个专业方向，说明理由
+
+### 7. 📝 操作建议
+志愿填报的具体步骤提醒
+
+## 对话记录
+
+${chatHistory}
+
+## 注意事项
+- 所有数据必须基于对话中工具查询到的真实数据，不要编造
+- 如果对话中缺少某些数据（如位次、分数），请标注"需补充"
+- 稳妥志愿的安全余量必须≥1500名
+- 位次波动大的院校要特别标注风险`;
+}
+
+// 独立的报告 SSE 调用（不污染对话历史）
+async function callLLMForReport(reportPrompt, onChunk, onStatus) {
+    const payload = {
+        model: 'default',
+        messages: [{ role: 'user', content: reportPrompt }],
+        stream: true,
+        max_tokens: 6000,
+        temperature: 0.5  // 报告用更低温度，更稳定
+    };
+    if (state.province) payload.province = state.province;
+    if (state.category) payload.category = state.category;
+
+    const response = await fetch(`${API_CONFIG.baseURL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${API_CONFIG.token}`
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errText.substring(0, 200)}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = '';
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+            const dataStr = trimmed.slice(6);
+            if (dataStr === '[DONE]') continue;
+
+            try {
+                const parsed = JSON.parse(dataStr);
+                if (parsed.type === 'tool_status' && onStatus) {
+                    onStatus(parsed.content);
+                    continue;
+                }
+                const delta = parsed.choices?.[0]?.delta?.content;
+                if (delta) {
+                    fullContent += delta;
+                    if (onChunk) onChunk(fullContent);
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+    }
+
+    return fullContent || '';
+}
+
+// 分享报告（复制到剪贴板）
+function shareReport() {
+    const textEl = document.getElementById('report-text');
+    if (!textEl || !textEl.textContent.trim()) {
+        alert('还没有报告内容可分享');
+        return;
+    }
+    const text = textEl.innerText;
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('report-share-btn');
+            btn.textContent = '已复制';
+            setTimeout(() => { btn.textContent = '分享'; }, 2000);
+        }).catch(() => fallbackCopy(text));
+    } else {
+        fallbackCopy(text);
+    }
+}
+
+function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+        document.execCommand('copy');
+        const btn = document.getElementById('report-share-btn');
+        btn.textContent = '已复制';
+        setTimeout(() => { btn.textContent = '分享'; }, 2000);
+    } catch (e) {
+        alert('复制失败，请长按选择文字复制');
+    }
+    document.body.removeChild(ta);
+}
+
+// ─── 连接检测 ────────────────────────────────────────────
+async function checkConnection() {
+    try {
+        await fetch(`${API_CONFIG.baseURL}/v1/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${API_CONFIG.token}`
+            },
+            body: JSON.stringify({
+                model: 'default',
+                messages: [{ role: 'user', content: 'ping' }],
+                max_tokens: 5
+            })
+        });
+    } catch (e) {
+        console.warn('连接检测失败:', e.message);
+    }
+}
+
+// ─── 输入框交互 ──────────────────────────────────────────
+userInput?.addEventListener('input', () => {
+    userInput.style.height = 'auto';
+    userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
+});
+
+userInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+});
+
+// ─── 持久化 ──────────────────────────────────────────────
+function persistState() {
+    localStorage.setItem('gaokao_messages',    JSON.stringify(state.messages));
+    localStorage.setItem('gaokao_usage_count', state.usageCount);
+}
+
+function restoreState() {
+    try {
+        const msgs = localStorage.getItem('gaokao_messages');
+        if (msgs) state.messages = JSON.parse(msgs);
+    } catch (_) {}
+    state.usageCount = parseInt(localStorage.getItem('gaokao_usage_count') || '0', 10);
+    // 恢复科类
+    const savedCategory = localStorage.getItem('gaokao_category');
+    if (savedCategory) {
+        state.category = savedCategory;
+        if (quickCategorySelect) quickCategorySelect.value = savedCategory;
+    }
+}
+
+// ─── 初始化 ──────────────────────────────────────────────
+function init() {
+    restoreState();
+    initProvinceSelect();
+    restoreMbti();
+
+    // MBTI "测一测"按钮
+    document.getElementById('mbti-test-btn')?.addEventListener('click', startMbtiTest);
+
+    // MBTI 手动输入：用户填入4个字母后自动保存
+    const mbtiInput = document.getElementById('quick-mbti');
+    mbtiInput?.addEventListener('blur', () => {
+        const val = mbtiInput.value.trim().toUpperCase();
+        if (val && /^[EI][SN][TF][JP]$/.test(val) && MBTI_TYPES[val]) {
+            const info = MBTI_TYPES[val];
+            state.mbti = { type: val, name: info.name, tags: info.tags, majors: info.majors, desc: info.desc };
+            localStorage.setItem('gaokao_mbti', JSON.stringify(state.mbti));
+            updateMbtiQuickPanel();
+            console.log('MBTI 手动设置:', val, info.name);
+        } else if (val) {
+            mbtiInput.value = '';
+            mbtiInput.placeholder = '格式如 INTJ';
+        }
+    });
+
+    // MBTI 结果行点击可重新测试
+    document.getElementById('mbti-result-row')?.addEventListener('click', startMbtiTest);
+
+    const savedUser = localStorage.getItem('gaokao_user');
+    if (savedUser) {
+        try {
+            state.user = JSON.parse(savedUser);
+            state.isLoggedIn = true;
+            updateUserUI();
+            showPage('home');
+        } catch (_) {}
+    }
+
+    updateUsageUI();
+    console.log('高报专家 H5 初始化完成');
+}
+
+init();
