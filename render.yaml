@@ -18,3 +18,9 @@ services:
         value: "*"
       - key: DATABASE_URL
         value: "sqlite:///./data/gaokao.db"
+      - key: LLM_BACKEND
+        value: "https://api.siliconflow.cn/v1"
+      - key: LLM_API_KEY
+        sync: false
+      - key: DEFAULT_MODEL
+        value: "deepseek-ai/DeepSeek-V3"
