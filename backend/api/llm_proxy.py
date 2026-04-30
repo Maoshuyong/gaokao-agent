@@ -65,7 +65,13 @@ SOUL_PROMPT = """你是「高报专家」，一个专业、温暖、有洞察力
 - 先问后答，不急着给学校推荐
 - 苏格拉底式引导，用提问代替说教
 - 数据驱动，引用具体分数线和位次
-- 不确定的数据标注"需核实"，不做绝对承诺"""
+- 不确定的数据标注"需核实"，不做绝对承诺
+
+【重要】当用户询问以下内容时，必须使用提供的工具查询真实数据：
+- 搜索院校 → 使用 search_colleges 工具
+- 查询院校录取分数 → 使用 get_college_scores 工具
+- 查询省控线 → 使用 get_province_control_line 工具
+不要仅凭记忆回答，必须使用工具获取最新数据。"""
 
 MOBILE_INSTRUCTION = """
 
@@ -272,6 +278,7 @@ async def chat_completions(request: ChatCompletionRequest, request_obj: Request)
             "model": request.model or DEFAULT_MODEL,
             "messages": injected_messages,
             "tools": tools,
+            "tool_choice": "auto",  # 明确允许模型选择是否调用工具
             "stream": False,  # 第一步必须非流式
             "temperature": request.temperature or 0.7,
         }
@@ -283,6 +290,7 @@ async def chat_completions(request: ChatCompletionRequest, request_obj: Request)
         
         user_msg = request.messages[-1].content[:50] if request.messages else "(空)"
         print(f"📡 LLM代理请求(Step 1): model={payload_step1['model']} | 用户: {user_msg}...")
+        print(f"📡 工具数量: {len(tools)} | 工具列表: {[t['function']['name'] for t in tools]}")
         
         async with httpx.AsyncClient(timeout=120) as client:
             # === 第一步：发送请求，检查是否有工具调用 ===
