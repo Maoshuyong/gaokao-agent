@@ -301,7 +301,7 @@ async def chat_completions(request: ChatCompletionRequest, request_obj: Request)
             "model": request.model or DEFAULT_MODEL,
             "messages": injected_messages,
             "tools": tools,
-            "tool_choice": "auto",  # 明确允许模型选择是否调用工具
+            "tool_choice": "required",  # 强制模型调用工具（不用 auto）
             "stream": False,  # 第一步必须非流式
             "temperature": request.temperature or 0.7,
         }
