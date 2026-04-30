@@ -54,8 +54,8 @@ LLM_CONFIGS = {
     "siliconflow": {
         "base_url": "https://api.siliconflow.cn/v1",
         "api_key_env": "LLM_API_KEY",
-        "default_model": "deepseek-ai/DeepSeek-V3",
-        "description": "SiliconFlow - 新用户送14元"
+        "default_model": os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen2.5-72B-Instruct"),
+        "description": "SiliconFlow - Qwen2.5-72B 支持 Function Calling"
     },
 }
 
