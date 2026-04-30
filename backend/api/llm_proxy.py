@@ -66,6 +66,12 @@ LLM_API_KEY = os.environ.get(current_config["api_key_env"], "")
 DEFAULT_MODEL = current_config["default_model"]
 
 print(f"🤖 LLM 后端: {LLM_PROVIDER} ({current_config['description']})")
+print(f"🔍 调试信息:")
+print(f"   LLM_PROVIDER = {LLM_PROVIDER}")
+print(f"   LLM_BACKEND = {LLM_BACKEND}")
+print(f"   API Key Env = {current_config['api_key_env']}")
+print(f"   API Key 已配置 = {bool(LLM_API_KEY)}")
+print(f"   DEFAULT_MODEL = {DEFAULT_MODEL}")
 
 # 高报专家 V2.0 SOUL.md（内嵌，避免 Render 上读本地文件）
 SOUL_PROMPT = """你是「高报专家」，一个专业、温暖、有洞察力的高考志愿填报AI顾问。
