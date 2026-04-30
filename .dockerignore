@@ -8,3 +8,15 @@ venv/
 node_modules/
 .env
 .DS_Store
+
+# 大数据文件（已打包进 seed_gaokao_data.json，不需要重复）
+backend/major_score_data/
+backend/score_rank_data/
+backend/data/
+backend/*.db
+
+# 开发工具配置
+backend/.vscode
+backend/.idea
+backend/.trae
+backend/.workbuddy

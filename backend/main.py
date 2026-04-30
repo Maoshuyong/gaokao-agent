@@ -3,6 +3,7 @@ FastAPI 应用入口 - 高考志愿填报数据服务 + 前端静态托管
 """
 import os
 import sys
+import asyncio
 from pathlib import Path
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import FastAPI, Request
@@ -58,7 +59,17 @@ async def startup_event():
     init_db()
     logger.info("数据库初始化完成")
 
-    # 自动填充院校 + 录取数据（仅当 College 表为空时）
+    # 将 seed 任务放到后台执行，不阻塞 startup（避免 Render health check 超时）
+    asyncio.create_task(_background_seed())
+
+
+async def _background_seed():
+    """后台种子数据填充 — 不阻塞请求处理"""
+    import subprocess
+
+    backend_dir = str(Path(__file__).parent)
+
+    # 1. 自动填充院校 + 录取数据（仅当 College 表为空时）
     try:
         from db import SessionLocal
         from models.college import College
@@ -66,12 +77,11 @@ async def startup_event():
         college_count = db.query(College).count()
         db.close()
         if college_count == 0:
-            logger.info("院校数据为空，开始填充种子数据...")
-            import subprocess
+            logger.info("院校数据为空，开始填充种子数据（后台任务）...")
             result = subprocess.run(
                 [sys.executable, "seed_gaokao_data.py"],
-                capture_output=True, text=True, timeout=120,
-                cwd=str(Path(__file__).parent)
+                capture_output=True, text=True, timeout=600,
+                cwd=backend_dir
             )
             if result.returncode == 0:
                 logger.info(f"院校数据填充成功: {result.stdout.strip()}")
@@ -82,22 +92,20 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"院校数据自动填充异常: {e}")
 
-    # 自动填充一分一段表
+    # 2. 自动填充一分一段表
     try:
         from db import SessionLocal
         from models.score_rank_table import ScoreRankTable
         from sqlalchemy import func as sa_func
         db = SessionLocal()
         count = db.query(ScoreRankTable).count()
-        # 检查是否有多年度数据（旧版只有 2024）
         years = [r[0] for r in db.query(ScoreRankTable.year).distinct().all()]
         db.close()
 
         need_seed = (count == 0) or (len(years) < 3)
         if need_seed:
             reason = "为空" if count == 0 else f"仅有 {years}，需升级"
-            logger.info(f"一分一段表{reason}，开始填充种子数据...")
-            import subprocess
+            logger.info(f"一分一段表{reason}，开始填充种子数据（后台任务）...")
             seed_script = "seed_score_rank_csv.py"
             seed_args = [sys.executable, seed_script, "--from-csv"]
             csv_dir = Path(__file__).parent / "score_rank_data"
@@ -113,7 +121,7 @@ async def startup_event():
             result = subprocess.run(
                 seed_args,
                 capture_output=True, text=True, timeout=180,
-                cwd=str(Path(__file__).parent)
+                cwd=backend_dir
             )
             if result.returncode == 0:
                 logger.info(f"一分一段表种子数据填充成功: {result.stdout.strip()}")
@@ -124,7 +132,7 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"一分一段表自动填充异常: {e}")
 
-    # 自动填充省控线（检查覆盖率，低于 80% 则重新填充）
+    # 3. 自动填充省控线（检查覆盖率，低于 80% 则重新填充）
     try:
         from db import SessionLocal
         from models.score import Score
@@ -136,12 +144,11 @@ async def startup_event():
 
         need_fill = (total > 0 and filled / total < 0.8) or filled == 0
         if need_fill:
-            logger.info(f"省控线覆盖率 {filled}/{total}，开始填充...")
-            import subprocess
+            logger.info(f"省控线覆盖率 {filled}/{total}，开始填充（后台任务）...")
             result = subprocess.run(
                 [sys.executable, "fill_control_scores.py"],
                 capture_output=True, text=True, timeout=120,
-                cwd=str(Path(__file__).parent)
+                cwd=backend_dir
             )
             if result.returncode == 0:
                 logger.info(f"省控线填充成功: {result.stdout.strip()}")
