@@ -7,6 +7,7 @@ LLM 代理路由 - /v1/chat/completions
 import json
 import os
 import re
+import sqlite3
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -294,61 +295,145 @@ def detect_intent(user_message: str) -> tuple:
 
 
 # ============================================================
-# 工具执行函数（TODO：连接真实数据库）
+# 工具执行函数（已连接真实数据库）
 # ============================================================
 
 async def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
-    """执行工具调用，返回结果字符串"""
+    """执行工具调用，查询真实数据库，返回结果字符串"""
     print(f"🔧 执行工具: {tool_name} | 参数: {tool_args}")
+    
+    # 连接数据库（使用相对路径，兼容本地和Render部署）
+    db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "gaokao.db")
+    print(f"📂 数据库路径: {db_path}")
+    
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row  # 使结果可以通过列名访问
+    cursor = conn.cursor()
     
     try:
         if tool_name == "search_colleges":
-            # TODO: 实际查询数据库
+            # 查询院校信息
             province = tool_args.get("province", "")
             college_type = tool_args.get("college_type", "")
             keyword = tool_args.get("keyword", "")
             
-            # 模拟数据（实际应该从数据库查询）
+            # 构造查询
+            query = "SELECT id, name, province, city, level, type, is_985, is_211, is_double_first FROM colleges WHERE 1=1"
+            params = []
+            
+            if province:
+                query += " AND province = ?"
+                params.append(province)
+            if college_type == "985":
+                query += " AND is_985 = 1"
+            elif college_type == "211":
+                query += " AND is_211 = 1"
+            elif college_type == "双一流":
+                query += " AND is_double_first = 1"
+            if keyword:
+                query += " AND (name LIKE ? OR short_name LIKE ?)"
+                params.extend([f"%{keyword}%", f"%{keyword}%"])
+            
+            query += " LIMIT 20"
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            results = []
+            for row in rows:
+                results.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "province": row["province"],
+                    "city": row["city"],
+                    "level": row["level"],
+                    "type": row["type"],
+                    "is_985": bool(row["is_985"]),
+                    "is_211": bool(row["is_211"]),
+                    "is_double_first": bool(row["is_double_first"])
+                })
+            
             return json.dumps({
                 "status": "success",
-                "data": [
-                    {"name": f"{province}大学（示例）", "province": province, "type": college_type or "普通本科"},
-                    {"name": f"{keyword or '理工'}大学（示例）", "province": province, "type": college_type or "普通本科"}
-                ],
-                "message": "⚠️ 当前为模拟数据，需要连接真实数据库"
+                "data": results,
+                "total": len(results)
             }, ensure_ascii=False)
             
         elif tool_name == "get_college_scores":
+            # 查询院校录取分数
             college_name = tool_args.get("college_name", "")
             province = tool_args.get("province", "")
             year = tool_args.get("year", 2024)
+            
+            query = """
+                SELECT college_name, year, province, batch, category, 
+                       min_score, min_rank, avg_score, control_score
+                FROM scores 
+                WHERE college_name LIKE ? AND province = ? AND year = ?
+                ORDER BY year DESC, batch, category
+            """
+            cursor.execute(query, (f"%{college_name}%", province, year))
+            rows = cursor.fetchall()
+            
+            if not rows:
+                return json.dumps({
+                    "status": "error",
+                    "message": f"未找到 {college_name} 在 {province} {year}年的录取数据"
+                }, ensure_ascii=False)
+            
+            scores = []
+            for row in rows:
+                scores.append({
+                    "year": row["year"],
+                    "province": row["province"],
+                    "batch": row["batch"],
+                    "category": row["category"],
+                    "min_score": row["min_score"],
+                    "min_rank": row["min_rank"],
+                    "avg_score": row["avg_score"],
+                    "control_score": row["control_score"]
+                })
             
             return json.dumps({
                 "status": "success",
                 "college": college_name,
                 "province": province,
                 "year": year,
-                "scores": [
-                    {"major": "计算机科学", "min_score": 580, "avg_score": 590},
-                    {"major": "电子信息", "min_score": 575, "avg_score": 585}
-                ],
-                "message": "⚠️ 当前为模拟数据，需要连接真实数据库"
+                "scores": scores
             }, ensure_ascii=False)
             
         elif tool_name == "get_province_control_line":
+            # 查询省控线（从scores表中获取control_score）
             province = tool_args.get("province", "")
             batch = tool_args.get("batch", "")
             category = tool_args.get("category", "")
             year = tool_args.get("year", 2024)
             
+            query = """
+                SELECT province, year, batch, category, control_score, MIN(min_score) as min_control
+                FROM scores 
+                WHERE province = ? AND batch = ? AND category = ? AND year = ?
+                GROUP BY province, year, batch, category
+                LIMIT 1
+            """
+            cursor.execute(query, (province, batch, category, year))
+            row = cursor.fetchone()
+            
+            if not row:
+                return json.dumps({
+                    "status": "error",
+                    "message": f"未找到 {province} {year}年 {batch} {category} 的省控线数据"
+                }, ensure_ascii=False)
+            
+            control_line = row["control_score"] if row["control_score"] else row["min_control"]
+            
             return json.dumps({
                 "status": "success",
-                "province": province,
-                "batch": batch,
-                "category": category,
-                "year": year,
-                "control_line": 450,
-                "message": "⚠️ 当前为模拟数据，需要连接真实数据库"
+                "province": row["province"],
+                "year": row["year"],
+                "batch": row["batch"],
+                "category": row["category"],
+                "control_line": control_line
             }, ensure_ascii=False)
         
         else:
@@ -359,10 +444,15 @@ async def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
     
     except Exception as e:
         print(f"❌ 工具执行失败: {e}")
+        import traceback
+        traceback.print_exc()
         return json.dumps({
             "status": "error",
             "message": str(e)
         }, ensure_ascii=False)
+    
+    finally:
+        conn.close()
 
 
 # ============================================================
