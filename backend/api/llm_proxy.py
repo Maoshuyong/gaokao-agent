@@ -2,15 +2,16 @@
 LLM 代理路由 - /v1/chat/completions
 支持多个免费 LLM 后端：Groq、SiliconFlow 等
 注入高报专家 SOUL.md 系统提示词，支持 mobile 模式和 SSE 流式输出
-支持 Function Calling（自动查询高考数据）
+支持后端意图解析（自动查询高考数据，不依赖 LLM Function Calling）
 """
 import json
 import os
+import re
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, tuple
 
 router = APIRouter(tags=["LLM 代理"])
 
@@ -124,7 +125,7 @@ MOBILE_INSTRUCTION = """
 
 
 # ============================================================
-# Function Calling 工具定义
+# Function Calling 工具定义（保留，用于文档和前端）
 # ============================================================
 
 TOOLS = [
@@ -177,6 +178,115 @@ TOOLS = [
         }
     }
 ]
+
+
+# ============================================================
+# 后端意图解析（SiliconFlow Function Calling 不靠谱，自己解析）
+# ============================================================
+
+def detect_intent(user_message: str) -> tuple:
+    """
+    检测用户意图，返回 (tool_name, tool_args) 或 (None, None)
+    关键词匹配规则（简单但有效）
+    """
+    msg = user_message.lower()
+    
+    # 省份列表（用于提取）
+    provinces = ["北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江",
+                 "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
+                 "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海",
+                 "内蒙古", "广西", "西藏", "宁夏", "新疆"]
+    
+    # 1. 检测 search_colleges（搜索院校）
+    # 关键词：大学、学院、985、211、双一流、高校
+    college_keywords = ["大学", "学院", "985", "211", "双一流", "高校", "本科学校"]
+    if any(kw in msg for kw in college_keywords):
+        args = {}
+        
+        # 提取省份
+        for prov in provinces:
+            if prov in msg:
+                args["province"] = prov
+                break
+        
+        # 提取院校类型
+        if "985" in msg:
+            args["college_type"] = "985"
+        elif "211" in msg:
+            args["college_type"] = "211"
+        elif "双一流" in msg:
+            args["college_type"] = "双一流"
+        
+        # 提取关键词（如"交通"、"师范"）
+        kw_match = re.search(r'([\u4e00-\u9fa5]{2,4})(大学|学院)', msg)
+        if kw_match:
+            args["keyword"] = kw_match.group(1)
+        
+        return ("search_colleges", args)
+    
+    # 2. 检测 get_college_scores（查询录取分数）
+    # 关键词：分数、录取、分数线、多少分
+    score_keywords = ["分数", "录取", "分数线", "多少分", "投档"]
+    if any(kw in msg for kw in score_keywords):
+        args = {}
+        
+        # 提取院校名称（简单匹配：XXX大学/学院）
+        college_match = re.search(r'([\u4e00-\u9fa5]{2,10})(大学|学院)', msg)
+        if college_match:
+            args["college_name"] = college_match.group(0)
+        
+        # 提取省份
+        for prov in provinces:
+            if prov in msg:
+                args["province"] = prov
+                break
+        
+        # 提取年份
+        year_match = re.search(r'20(\d{2})', msg)
+        if year_match:
+            args["year"] = int("20" + year_match.group(1))
+            
+        if "college_name" in args and "province" in args:
+            return ("get_college_scores", args)
+    
+    # 3. 检测 get_province_control_line（查询省控线）
+    # 关键词：省控线、批次线、本科线、专科线
+    control_keywords = ["省控线", "批次线", "本科线", "专科线", "控制线"]
+    if any(kw in msg for kw in control_keywords):
+        args = {}
+        
+        # 提取省份
+        for prov in provinces:
+            if prov in msg:
+                args["province"] = prov
+                break
+        
+        # 提取批次
+        if "一批" in msg or "本科一批" in msg:
+            args["batch"] = "本科一批"
+        elif "二批" in msg or "本科二批" in msg:
+            args["batch"] = "本科二批"
+        elif "专科" in msg:
+            args["batch"] = "专科批"
+            
+        # 提取科类
+        if "文科" in msg or "历史" in msg:
+            args["category"] = "文科"
+        elif "理科" in msg or "物理" in msg:
+            args["category"] = "理科"
+        elif "综合" in msg:
+            args["category"] = "综合"
+            
+        # 提取年份
+        year_match = re.search(r'20(\d{2})', msg)
+        if year_match:
+            args["year"] = int("20" + year_match.group(1))
+            
+        if "province" in args and "batch" in args and "category" in args:
+            return ("get_province_control_line", args)
+    
+    # 无匹配意图
+    return (None, None)
 
 
 # ============================================================
@@ -265,16 +375,16 @@ class ChatCompletionRequest(BaseModel):
     messages: List[ChatMessage]
     stream: Optional[bool] = True
     temperature: Optional[float] = 0.7
-    tools: Optional[List[Dict]] = None  # 支持前端传入自定义工具
+    tools: Optional[List[Dict]] = None  # 保留，用于前端自定义
 
 
 # ============================================================
-# 路由
+# 路由（后端意图解析版本）
 # ============================================================
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest, request_obj: Request):
-    """OpenAI 兼容的 chat completions 代理接口（支持 Function Calling）"""
+    """OpenAI 兼容的 chat completions 代理接口（后端意图解析）"""
     
     if not LLM_API_KEY:
         raise HTTPException(
@@ -287,22 +397,48 @@ async def chat_completions(request: ChatCompletionRequest, request_obj: Request)
     db = SessionLocal()
     
     try:
-        # 构造带系统提示词的的数据列表
+        # 获取用户最新消息
+        user_message = request.messages[-1].content if request.messages else ""
+        
+        # === 后端意图解析（不依赖 LLM Function Calling）===
+        tool_name, tool_args = detect_intent(user_message)
+        
+        # 构造系统提示词（基础版）
         system_content = SOUL_PROMPT + MOBILE_INSTRUCTION
+        
+        # 如果有意图匹配，调用工具并将结果注入到系统提示词
+        if tool_name and tool_args:
+            print(f"🎯 后端意图解析：检测到 {tool_name} | 参数：{tool_args}")
+            tool_result = await execute_tool(tool_name, tool_args, db)
+            
+            # 将工具结果注入到系统提示词
+            tool_context = f"""
+
+═══════════════════════════════════════
+【高考数据查询结果】
+你刚刚调用了 {tool_name} 工具，结果如下：
+
+{tool_result}
+
+请基于以上真实数据回答用户问题。不要说"工具返回"，直接说数据内容。
+═══════════════════════════════════════
+"""
+            system_content += tool_context
+            print(f"✅ 工具结果已注入到系统提示词")
+        
+        # 构造消息列表（包含增强的系统提示词）
         injected_messages = [
             {"role": "system", "content": system_content},
         ] + [m.model_dump() for m in request.messages]
         
-        # 使用请求中的 tools，或默认注入 TOOLS
-        tools = request.tools if request.tools else TOOLS
+        # 不再使用 tools 参数（SiliconFlow Function Calling 不靠谱）
+        print(f"📡 LLM代理请求: model={request.model or DEFAULT_MODEL} | 用户: {user_message[:50]}...")
         
-        # 构造转发给 LLM 后端的请求体（第一步：非流式，检查是否有工具调用）
-        payload_step1 = {
+        # 构造请求体（不包含 tools）
+        payload = {
             "model": request.model or DEFAULT_MODEL,
             "messages": injected_messages,
-            "tools": tools,
-            "tool_choice": "required",  # 强制模型调用工具（不用 auto）
-            "stream": False,  # 第一步必须非流式
+            "stream": request.stream if request.stream is not None else True,
             "temperature": request.temperature or 0.7,
         }
         
@@ -311,154 +447,49 @@ async def chat_completions(request: ChatCompletionRequest, request_obj: Request)
             "Authorization": f"Bearer {LLM_API_KEY}",
         }
         
-        user_msg = request.messages[-1].content[:50] if request.messages else "(空)"
-        print(f"📡 LLM代理请求(Step 1): model={payload_step1['model']} | 用户: {user_msg}...")
-        print(f"📡 工具数量: {len(tools)} | 工具列表: {[t['function']['name'] for t in tools]}")
-        
         async with httpx.AsyncClient(timeout=120) as client:
-            # === 第一步：发送请求，检查是否有工具调用 ===
-            resp1 = await client.post(
+            resp = await client.post(
                 f"{LLM_BACKEND}/chat/completions",
-                json=payload_step1,
-                headers=headers,
+                json=payload,
+                headers={**headers, "Accept": "text/event-stream"},
             )
             
-            if resp1.status_code != 200:
+            if resp.status_code != 200:
                 raise HTTPException(
-                    status_code=resp1.status_code,
-                    detail=f"LLM 后端错误: {resp1.text[:500]}"
+                    status_code=resp.status_code,
+                    detail=f"LLM 后端错误: {resp.text[:500]}"
                 )
             
-            resp1_data = resp1.json()
-            
-            # 检查是否有工具调用
-            choice = resp1_data["choices"][0]
-            message = choice["message"]
-            
-            if "tool_calls" in message and message["tool_calls"]:
-                # === 有工具调用，执行工具 ===
-                tool_calls = message["tool_calls"]
-                print(f"🔧 检测到 {len(tool_calls)} 个工具调用")
-                
-                # 执行所有工具调用
-                tool_results = []
-                for tc in tool_calls:
-                    tool_name = tc["function"]["name"]
-                    tool_args = json.loads(tc["function"]["arguments"])
+            # 处理响应（流式或非流式）
+            if payload["stream"]:
+                # === 流式响应 ===
+                async def event_stream():
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            json_str = line[6:]
+                            try:
+                                json.loads(json_str)  # 验证 JSON 合法性
+                                yield f"{line}\n\n"
+                            except json.JSONDecodeError:
+                                pass
+                        elif line == "data: [DONE]":
+                            yield "data: [DONE]\n\n"
                     
-                    result = await execute_tool(tool_name, tool_args, db)
-                    tool_results.append({
-                        "tool_call_id": tc["id"],
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": result
-                    })
-                
-                # 构造第二步的消息列表（包含工具调用结果）
-                messages_step2 = injected_messages + [
-                    {
-                        "role": "assistant",
-                        "content": message.get("content", ""),
-                        "tool_calls": tool_calls
+                return StreamingResponse(
+                    event_stream(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "Access-Control-Allow-Origin": "*",
                     }
-                ] + tool_results
-                
-                # 第二步：请求最终回复（支持流式）
-                payload_step2 = {
-                    "model": request.model or DEFAULT_MODEL,
-                    "messages": messages_step2,
-                    "stream": request.stream if request.stream is not None else True,
-                    "temperature": request.temperature or 0.7,
-                }
-                
-                print(f"📡 LLM代理请求(Step 2): 发送工具结果，请求最终回复...")
-                
-                resp2 = await client.post(
-                    f"{LLM_BACKEND}/chat/completions",
-                    json=payload_step2,
-                    headers={**headers, "Accept": "text/event-stream"},
                 )
-                
-                if resp2.status_code != 200:
-                    raise HTTPException(
-                        status_code=resp2.status_code,
-                        detail=f"LLM 后端错误(Step 2): {resp2.text[:500]}"
-                    )
-                
-                # 处理第二步的响应（流式或非流式）
-                if payload_step2["stream"]:
-                    # === 流式响应 ===
-                    async def event_stream():
-                        async for line in resp2.aiter_lines():
-                            if line.startswith("data: ") and line != "data: [DONE]":
-                                json_str = line[6:]
-                                try:
-                                    json.loads(json_str)  # 验证 JSON 合法性
-                                    yield f"{line}\n\n"
-                                except json.JSONDecodeError:
-                                    pass
-                            elif line == "data: [DONE]":
-                                yield "data: [DONE]\n\n"
-                    
-                    return StreamingResponse(
-                        event_stream(),
-                        media_type="text/event-stream",
-                        headers={
-                            "Cache-Control": "no-cache",
-                            "Connection": "keep-alive",
-                            "Access-Control-Allow-Origin": "*",
-                        }
-                    )
-                else:
-                    # === 非流式响应 ===
-                    return JSONResponse(
-                        content=resp2.json(),
-                        headers={"Access-Control-Allow-Origin": "*"}
-                    )
             else:
-                # === 没有工具调用，直接返回第一步的响应 ===
-                print("✅ 无工具调用，直接返回")
-                
-                if request.stream is not None and request.stream == False:
-                    # 非流式，直接返回
-                    return JSONResponse(
-                        content=resp1_data,
-                        headers={"Access-Control-Allow-Origin": "*"}
-                    )
-                else:
-                    # 流式，需要重新请求（因为第一步用了 stream=False）
-                    payload_stream = {
-                        **payload_step1,
-                        "stream": True
-                    }
-                    
-                    resp_stream = await client.post(
-                        f"{LLM_BACKEND}/chat/completions",
-                        json=payload_stream,
-                        headers={**headers, "Accept": "text/event-stream"},
-                    )
-                    
-                    async def event_stream():
-                        async for line in resp_stream.aiter_lines():
-                            if line.startswith("data: ") and line != "data: [DONE]":
-                                json_str = line[6:]
-                                try:
-                                    json.loads(json_str)
-                                    yield f"{line}\n\n"
-                                except json.JSONDecodeError:
-                                    pass
-                            elif line == "data: [DONE]":
-                                yield "data: [DONE]\n\n"
-                    
-                    return StreamingResponse(
-                        event_stream(),
-                        media_type="text/event-stream",
-                        headers={
-                            "Cache-Control": "no-cache",
-                            "Connection": "keep-alive",
-                            "Access-Control-Allow-Origin": "*",
-                        }
-                    )
+                # === 非流式响应 ===
+                return JSONResponse(
+                    content=resp.json(),
+                    headers={"Access-Control-Allow-Origin": "*"}
+                )
     
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"无法连接 LLM 服务: {e}")
