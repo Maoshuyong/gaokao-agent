@@ -54,8 +54,8 @@ LLM_CONFIGS = {
     "siliconflow": {
         "base_url": "https://api.siliconflow.cn/v1",
         "api_key_env": "LLM_API_KEY",
-        "default_model": os.environ.get("SILICONFLOW_MODEL", "deepseek-ai/DeepSeek-V4-Flash"),
-        "description": "SiliconFlow - DeepSeek-V4-Flash 支持 Function Calling"
+        "default_model": os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3.5-35B-A3B"),
+        "description": "SiliconFlow - Qwen3.5 支持 Function Calling"
     },
 }
 
