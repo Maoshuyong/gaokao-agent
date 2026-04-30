@@ -293,7 +293,7 @@ def detect_intent(user_message: str) -> tuple:
 # 工具执行函数（TODO：连接真实数据库）
 # ============================================================
 
-async def execute_tool(tool_name: str, tool_args: Dict[str, Any], db_session) -> str:
+async def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
     """执行工具调用，返回结果字符串"""
     print(f"🔧 执行工具: {tool_name} | 参数: {tool_args}")
     
@@ -392,10 +392,6 @@ async def chat_completions(request: ChatCompletionRequest, request_obj: Request)
             detail="LLM_API_KEY 未配置，请设置环境变量"
         )
     
-    # 获取数据库 session（用于工具执行）
-    from db import SessionLocal
-    db = SessionLocal()
-    
     try:
         # 获取用户最新消息
         user_message = request.messages[-1].content if request.messages else ""
@@ -409,7 +405,7 @@ async def chat_completions(request: ChatCompletionRequest, request_obj: Request)
         # 如果有意图匹配，调用工具并将结果注入到系统提示词
         if tool_name and tool_args:
             print(f"🎯 后端意图解析：检测到 {tool_name} | 参数：{tool_args}")
-            tool_result = await execute_tool(tool_name, tool_args, db)
+            tool_result = await execute_tool(tool_name, tool_args)
             
             # 将工具结果注入到系统提示词
             tool_context = f"""
@@ -493,6 +489,3 @@ async def chat_completions(request: ChatCompletionRequest, request_obj: Request)
     
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"无法连接 LLM 服务: {e}")
-    
-    finally:
-        db.close()
