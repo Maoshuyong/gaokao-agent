@@ -15,6 +15,23 @@ from typing import Optional, List, Dict, Any
 router = APIRouter(tags=["LLM 代理"])
 
 # ============================================================
+# 配置检查端点（无需认证）
+# ============================================================
+
+@router.get("/v1/config")
+async def get_config():
+    """返回当前 LLM 配置（不包含 API Key）"""
+    return {
+        "llm_provider": LLM_PROVIDER,
+        "llm_backend": LLM_BACKEND,
+        "default_model": DEFAULT_MODEL,
+        "description": current_config["description"],
+        "api_key_configured": bool(LLM_API_KEY),
+        "tools_count": len(TOOLS),
+        "tools": [t["function"]["name"] for t in TOOLS]
+    }
+
+# ============================================================
 # 多后端配置
 # ============================================================
 
