@@ -302,8 +302,8 @@ async def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
     """执行工具调用，查询真实数据库，返回结果字符串"""
     print(f"🔧 执行工具: {tool_name} | 参数: {tool_args}")
     
-    # 连接数据库（使用相对路径，兼容本地和Render部署）
-    db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "gaokao.db")
+    # 连接数据库（使用示例数据库，仅包含陕西高校）
+    db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "gaokao_sample.db")
     print(f"📂 数据库路径: {db_path}")
     
     conn = sqlite3.connect(db_path)
