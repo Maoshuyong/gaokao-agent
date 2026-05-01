@@ -17,7 +17,7 @@ services:
       - key: CORS_ORIGINS
         value: "*"
       - key: DATABASE_URL
-        value: "sqlite:///./data/gaokao_shanxi_recruit.db"
+        value: "sqlite:////app/data/gaokao_shanxi_recruit.db"
       - key: LLM_BACKEND
         value: "https://api.siliconflow.cn/v1"
       - key: LLM_API_KEY
