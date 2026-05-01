@@ -20,6 +20,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制后端应用代码
 COPY backend/ .
 
+# 复制数据库文件（示例数据库）
+COPY backend/data/gaokao_shanxi_recruit.db /app/data/gaokao_shanxi_recruit.db
+
 # 从 Stage 1 复制前端构建产物
 COPY --from=frontend-builder /frontend/dist /app/static
 

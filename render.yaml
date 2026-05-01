@@ -17,10 +17,10 @@ services:
       - key: CORS_ORIGINS
         value: "*"
       - key: DATABASE_URL
-        value: "sqlite:///./data/gaokao.db"
+        value: "sqlite:///./data/gaokao_shanxi_recruit.db"
       - key: LLM_BACKEND
         value: "https://api.siliconflow.cn/v1"
       - key: LLM_API_KEY
         sync: false
       - key: DEFAULT_MODEL
-        value: "deepseek-ai/DeepSeek-V3"
+        value: "Qwen/Qwen3.5-35B-A3B"
