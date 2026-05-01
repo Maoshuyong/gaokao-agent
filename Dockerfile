@@ -22,5 +22,5 @@ COPY backend/ .
 
 EXPOSE 10000
 
-# 直接启动应用（无需下载数据库）
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${PORT:-10000}"]
+# 直接启动应用（shell格式，使 ${PORT} 生效）
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}
