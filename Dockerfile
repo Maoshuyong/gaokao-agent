@@ -3,11 +3,6 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 安装 curl（用于下载数据库）
-RUN apt-get update && apt-get install -y curl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
 # 安装后端依赖
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

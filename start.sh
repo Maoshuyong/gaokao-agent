@@ -32,9 +32,24 @@ else
     # 创建目录
     mkdir -p "$(dirname "$DB_PATH")"
     
-    # 下载数据库（使用 curl，显示进度条）
+    # 下载数据库（优先使用 curl，否则用 wget，最后用 Python）
     echo "⏳ 下载中..."
-    curl -L -o "$DB_PATH" "$DB_URL" --progress-bar
+    
+    if command -v curl &> /dev/null; then
+        curl -L -o "$DB_PATH" "$DB_URL" --progress-bar
+    elif command -v wget &> /dev/null; then
+        wget -O "$DB_PATH" "$DB_URL"
+    else
+        echo "    curl/wget 未找到，使用 Python 下载..."
+        python3 -c "
+import urllib.request
+import sys
+url = '$DB_URL'
+filename = '$DB_PATH'
+urllib.request.urlretrieve(url, filename)
+print(f'   下载完成: {filename}')
+"
+    fi
     
     # 验证下载
     if [ -f "$DB_PATH" ]; then
