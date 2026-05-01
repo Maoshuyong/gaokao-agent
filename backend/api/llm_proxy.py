@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any, tuple
+from typing import Optional, List, Dict, Any
 
 router = APIRouter(tags=["LLM 代理"])
 
