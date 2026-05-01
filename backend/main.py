@@ -54,13 +54,12 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """启动事件"""
+    """启动事件 - 简化版（数据库在构建时已完成）"""
     logger.info("应用启动中...")
     init_db()
     logger.info("数据库初始化完成")
-
-    # 将 seed 任务放到后台执行，不阻塞 startup（避免 Render health check 超时）
-    asyncio.create_task(_background_seed())
+    logger.info("✅ 种子数据已在构建时导入，跳过运行时检查")
+    logger.info(f"✅ 数据库: {settings.DATABASE_URL}")
 
 
 async def _background_seed():
@@ -158,6 +157,34 @@ async def _background_seed():
             logger.info(f"省控线覆盖率 {filled}/{total} ({filled*100//total}%)，跳过填充")
     except Exception as e:
         logger.warning(f"省控线自动填充异常: {e}")
+
+    # 4. 自动填充专业分数线（检查是否有数据，无则从 gzip 导入）
+    try:
+        from db import SessionLocal
+        from models.score import Score
+        db = SessionLocal()
+        has_majors = db.query(Score).filter(Score.major_scores.isnot(None)).limit(1).first()
+        db.close()
+
+        if not has_majors:
+            gz_file = Path(__file__).parent / "major_scores_seed.json.gz"
+            if gz_file.exists():
+                logger.info("专业分数线为空，开始从 gzip 导入（后台任务）...")
+                result = subprocess.run(
+                    [sys.executable, "import_major_scores_seed.py"],
+                    capture_output=True, text=True, timeout=600,
+                    cwd=backend_dir
+                )
+                if result.returncode == 0:
+                    logger.info(f"专业分数线导入成功: {result.stdout.strip()}")
+                else:
+                    logger.warning(f"专业分数线导入失败: {result.stderr.strip()}")
+            else:
+                logger.info("专业分数线 seed 文件不存在，跳过")
+        else:
+            logger.info("专业分数线已有数据，跳过导入")
+    except Exception as e:
+        logger.warning(f"专业分数线自动填充异常: {e}")
 
 
 @app.get("/")
