@@ -16,4 +16,7 @@ RUN mkdir -p /app/data
 EXPOSE 10000
 
 # Render 注入 PORT 环境变量
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}
+# 使用启动脚本（自动下载数据库）
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+CMD ["/bin/bash", "/app/start.sh"]
