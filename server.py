@@ -4,12 +4,14 @@
 提供 OpenAI 兼容接口，加载 SOUL.md 系统提示词
 """
 from flask import Flask, request, Response, stream_with_context
+from flask_cors import CORS
 import os
 import json
 import requests
 from pathlib import Path
 
 app = Flask(__name__)
+CORS(app)  # 启用 CORS，允许浏览器跨域请求
 
 # 配置
 PORT = int(os.environ.get("PORT", 10000))
