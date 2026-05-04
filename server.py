@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-高报专家 Hermes Gateway - Render 部署版 V2
+高报专家 Hermes Gateway - Render 部署版 V3
 提供 OpenAI 兼容接口，加载 SOUL.md 系统提示词
+支持 CORS（允许浏览器跨域请求）
 """
-from flask import Flask, request, Response, stream_with_context
-from flask_cors import CORS
+from flask import Flask, request, Response, stream_with_context, make_response
 import os
 import json
 import requests
 from pathlib import Path
 
 app = Flask(__name__)
-CORS(app)  # 启用 CORS，允许浏览器跨域请求
 
 # 配置
 PORT = int(os.environ.get("PORT", 10000))
@@ -34,12 +33,22 @@ def load_soul():
 SOUL_PROMPT = load_soul()
 print(f"📝 SOUL.md 已加载（{len(SOUL_PROMPT)} 字符）")
 
-@app.route('/health')
+# CORS 支持
+@app.after_request
+def after_request(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
+@app.route('/health', methods=['GET', 'OPTIONS'])
 def health():
     """健康检查"""
+    if request.method == 'OPTIONS':
+        return '', 200
     return {"status": "ok", "service": "hermes-gateway"}
 
-@app.route('/')
+@app.route('/', methods=['GET'])
 def root():
     """根路径 - 显示服务信息"""
     return {
@@ -51,9 +60,12 @@ def root():
         }
     }
 
-@app.route('/v1/chat/completions', methods=['POST'])
+@app.route('/v1/chat/completions', methods=['POST', 'OPTIONS'])
 def chat_completions():
     """OpenAI 兼容接口 - 转发到 SiliconFlow"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     auth = request.headers.get("Authorization", "")
     if not auth or not auth.startswith("Bearer "):
         return {"error": "Missing Authorization"}, 401
