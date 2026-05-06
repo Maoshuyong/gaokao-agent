@@ -13,9 +13,13 @@ from db import get_db
 from services.scoring_service import ScoringService
 from models import College, Score, ScoreRankTable
 
+# 导入新高考政策判断
+from new_gaokao_schedule import is_new_gaokao, get_category_mapping
+
 router = APIRouter(prefix="/api/v1", tags=["tools"])
 
 # 新高考科类 → 老高考科类映射（Score 表分数线数据按老高考存储）
+# 注意：新高考省份的科类（物理类/历史类）不映射，直接使用
 CATEGORY_MAP = {
     '物理类': '理科',
     '历史类': '文科',
@@ -25,9 +29,33 @@ CATEGORY_REVERSE_MAP = {
     '文科': '历史类',
 }
 
-def normalize_category(category: str) -> str:
-    """将新高考科类映射到老高考科类（用于查询 Score 表）"""
-    return CATEGORY_MAP.get(category, category)
+def normalize_category(category: str, province: str = None, year: int = None) -> str:
+    """
+    将新高考科类映射到老高考科类（用于查询 Score 表）
+    
+    根据年份和省份判断是否实施新高考：
+    - 新高考省份：直接使用原科类（物理类/历史类）
+    - 老高考省份：映射（物理类→理科，历史类→文科）
+    
+    Args:
+        category: 用户输入的科类
+        province: 省份（用于判断新高考）
+        year: 年份（用于判断新高考）
+    
+    Returns:
+        str: 数据库查询使用的科类
+    """
+    # 如果没有提供省份和年份，使用默认映射
+    if province is None or year is None:
+        return CATEGORY_MAP.get(category, category)
+    
+    # 判断是否为新高考省份
+    if is_new_gaokao(province, year):
+        # 新高考：直接使用原科类（物理类/历史类）
+        return category
+    else:
+        # 老高考：映射（物理类→理科，历史类→文科）
+        return CATEGORY_MAP.get(category, category)
 
 def denormalize_category(category: str, year: int, province: str) -> str:
     """将老高考科类映射回新高考科类（用于返回给前端）"""
@@ -247,13 +275,11 @@ async def recommend_colleges(
     1. 判断该省该年是否实施新高考（新高考省份的科类映射不同）
     2. 不用于过滤数据（因为未来年份的数据可能不存在）
     """
-    # 新高考科类映射（物理类→理科，历史类→文科）
-    query_category = normalize_category(category)
+    # 新高考科类映射（根据年份和省份判断）
+    query_category = normalize_category(category, province, year)
     
     # 根据年份判断该省是否实施新高考
-    # 2025年起更多省份实施新高考，需要根据实际政策调整
-    new_gaokao_provinces = ['江苏', '湖北', '湖南', '广东', '福建', '重庆', '河北', '辽宁']
-    is_new_gaokao = (year and year >= 2025 and province in new_gaokao_provinces)
+    is_new_gaokao = is_new_gaokao(province, year) if year else False
     
     if is_new_gaokao:
         print(f"📝 新高考省份：{province} ({year}年)")
