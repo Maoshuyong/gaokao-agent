@@ -227,6 +227,7 @@ async def recommend_colleges(
     category: str = Query(..., description="科类"),
     score: int = Query(..., description="高考成绩"),
     rank: int = Query(..., description="省排名"),
+    year: Optional[int] = Query(None, description="高考年份，用于判断新高考政策"),
     level: Optional[str] = Query(None, description="院校层次"),
     college_type: Optional[str] = Query(None, description="院校类型"),
     target_provinces: Optional[str] = Query(None, description="目标省份（逗号分隔）"),
