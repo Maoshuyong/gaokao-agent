@@ -266,11 +266,11 @@ async def recommend_colleges(
         Score.category == query_category,
         Score.min_rank.isnot(None)
     ]
-    
+
     # 如果指定了年份，按该年份过滤
-    if year:
+    if year is not None:
         score_filter.append(Score.year == year)
-    
+
     latest_scores = db.query(
         Score.college_code,
         func.min(Score.min_rank).label("latest_rank")
@@ -278,12 +278,19 @@ async def recommend_colleges(
         *score_filter
     ).group_by(Score.college_code).subquery()
 
+    # 构建院校查询（根据省份、科类、年份过滤）
+    college_filter = [
+        Score.province == province,
+        Score.category == query_category
+    ]
+
+    if year is not None:
+        college_filter.append(Score.year == year)
+
     query = db.query(College).filter(
         College.code.in_(
             db.query(Score.college_code).filter(
-                Score.province == province,
-                Score.category == query_category,
-                Score.year == year if year else True  # 按年份过滤（如果指定了年份）
+                *college_filter
             ).distinct()
         )
     )
