@@ -244,14 +244,14 @@ async def recommend_colleges(
     Agent 可用此接口获取候选院校列表，再调用 /probability 计算具体概率。
     
     year 参数用于：
-    1. 按指定年份过滤录取数据
-    2. 判断该省该年是否实施新高考（新高考省份的科类映射不同）
+    1. 判断该省该年是否实施新高考（新高考省份的科类映射不同）
+    2. 不用于过滤数据（因为未来年份的数据可能不存在）
     """
     # 新高考科类映射（物理类→理科，历史类→文科）
     query_category = normalize_category(category)
     
     # 根据年份判断该省是否实施新高考
-    # TODO: 2025年起更多省份实施新高考，需要根据实际政策调整
+    # 2025年起更多省份实施新高考，需要根据实际政策调整
     new_gaokao_provinces = ['江苏', '湖北', '湖南', '广东', '福建', '重庆', '河北', '辽宁']
     is_new_gaokao = (year and year >= 2025 and province in new_gaokao_provinces)
     
@@ -260,33 +260,23 @@ async def recommend_colleges(
         # 新高考省份：使用新高考科类（物理类/历史类）
         query_category = category  # 不使用映射，直接使用原科类
     
-    # 查找有该省该科类历史数据的院校，取指定年份的录取位次作为排序依据
-    score_filter = [
-        Score.province == province,
-        Score.category == query_category,
-        Score.min_rank.isnot(None)
-    ]
-
-    # 如果指定了年份，按该年份过滤
-    if year is not None:
-        score_filter.append(Score.year == year)
-
+    # 查找有该省该科类历史数据的院校，取最新一年的录取位次作为排序依据
+    # 注意：不过滤年份，因为未来年份的数据可能不存在
     latest_scores = db.query(
         Score.college_code,
         func.min(Score.min_rank).label("latest_rank")
     ).filter(
-        *score_filter
+        Score.province == province,
+        Score.category == query_category,
+        Score.min_rank.isnot(None)
     ).group_by(Score.college_code).subquery()
 
-    # 构建院校查询（根据省份、科类、年份过滤）
+    # 构建院校查询（根据省份、科类过滤，不过滤年份）
     college_filter = [
         Score.province == province,
         Score.category == query_category
     ]
-
-    if year is not None:
-        college_filter.append(Score.year == year)
-
+    
     query = db.query(College).filter(
         College.code.in_(
             db.query(Score.college_code).filter(
