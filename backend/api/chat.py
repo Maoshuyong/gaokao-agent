@@ -34,7 +34,7 @@ def normalize_category(category: str, province: str = None, year: int = None) ->
     将新高考科类映射到老高考科类（用于查询 Score 表）
     
     根据年份和省份判断是否实施新高考：
-    - 新高考省份：直接使用原科类（物理类/历史类）
+    - 新高考省份：需要判断数据库中的科类存储方式
     - 老高考省份：映射（物理类→理科，历史类→文科）
     
     Args:
@@ -51,10 +51,12 @@ def normalize_category(category: str, province: str = None, year: int = None) ->
     
     # 判断是否为新高考省份
     if is_new_gaokao(province, year):
-        # 新高考：直接使用原科类（物理类/历史类）
-        return category
+        # 新高考省份：数据库中的科类可能是"物理类/历史类"或"理科/文科"
+        # 需要检查数据库中的实际存储方式
+        # 目前假设：新高考省份按新高考科类存储（物理类/历史类）
+        return category  # 不映射，直接使用
     else:
-        # 老高考：映射（物理类→理科，历史类→文科）
+        # 老高考省份：映射（物理类→理科，历史类→文科）
         return CATEGORY_MAP.get(category, category)
 
 def denormalize_category(category: str, year: int, province: str) -> str:
@@ -310,7 +312,18 @@ async def recommend_colleges(
             ).distinct()
         )
     )
-
+    
+    # 🔧 P0修复：根据用户位次过滤院校范围
+    if rank:
+        min_rank = int(rank * 0.3)
+        max_rank = int(rank * 3.0)
+        query = query.outerjoin(latest_scores, College.code == latest_scores.c.college_code)
+        query = query.filter(
+            latest_scores.c.latest_rank >= min_rank,
+            latest_scores.c.latest_rank <= max_rank
+        )
+        print(f"📊 位次过滤：{min_rank} ~ {max_rank}")
+    
     # 筛选条件
     if level:
         query = query.filter(College.level == level)
