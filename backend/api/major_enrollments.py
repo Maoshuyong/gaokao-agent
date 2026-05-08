@@ -425,3 +425,322 @@ async def recommend_majors_by_mbti(
         )
         for row in result
     ]
+
+
+# ═══════════════════════════════════════════════════════════
+# 冲稳保推荐 API
+# ═══════════════════════════════════════════════════════════
+
+class CollegeRecommendation(BaseModel):
+    """冲稳保院校推荐项"""
+    college_name: str
+    college_code: Optional[str] = None
+    batch: Optional[str] = None
+    min_score_2024: Optional[int] = None
+    min_rank_2024: Optional[int] = None
+    avg_score_2024: Optional[int] = None
+    min_score_2023: Optional[int] = None
+    min_rank_2023: Optional[int] = None
+    min_score_2022: Optional[int] = None
+    min_rank_2022: Optional[int] = None
+    control_score: Optional[int] = None
+    enrollment: Optional[int] = None
+    rank_gap: Optional[int] = None          # 位次差（考生位次 - 院校位次）
+    top_majors: Optional[List[str]] = None   # 分数较低的热门专业
+    risk_level: str = ""                     # 冲/稳/保
+    tags: Optional[List[str]] = None         # 985/211 等标签
+
+
+class ReachMatchSafetyResponse(BaseModel):
+    """冲稳保推荐响应"""
+    student_score: Optional[int] = None
+    student_rank: Optional[int] = None
+    province: str
+    category: str
+    estimated_rank: Optional[int] = None      # 由分数估算的位次
+    rank_source: str = ""                     # "用户提供" / "分数估算"
+    reach: List[CollegeRecommendation] = []   # 冲
+    match: List[CollegeRecommendation] = []   # 稳
+    safety: List[CollegeRecommendation] = []  # 保
+    total_found: int = 0
+    note: str = ""
+
+
+@router.get("/recommend-rms", response_model=ReachMatchSafetyResponse)
+async def recommend_reach_match_safety(
+    province: str = Query("陕西", description="省份"),
+    category: str = Query(..., description="科类（文科/理科/物理类/历史类）"),
+    score: Optional[int] = Query(None, description="高考分数"),
+    rank: Optional[int] = Query(None, description="省排名（位次）"),
+    year: int = Query(2024, description="参考年份（录取数据年份）"),
+    batch: Optional[str] = Query(None, description="批次（默认本科一批）"),
+    reach_limit: int = Query(10, ge=1, le=50, description="冲的数量"),
+    match_limit: int = Query(15, ge=1, le=50, description="稳的数量"),
+    safety_limit: int = Query(10, ge=1, le=50, description="保的数量"),
+    db: Session = Depends(get_db)
+):
+    """
+    冲稳保院校推荐
+
+    核心逻辑（基于位次匹配）：
+    - 冲（Reach）：院校最低位次比考生位次高 300~3000 名
+    - 稳（Match）：院校最低位次在考生位次 ±300 名
+    - 保（Safety）：院校最低位次比考生位次低 300~5000 名
+
+    优先使用位次（rank），如果没有则通过一分一段表从分数估算位次。
+    """
+    from sqlalchemy import text as _text
+    import json as _json
+
+    def T(sql_str):
+        """Shortcut for sqlalchemy.text"""
+        return _text(sql_str)
+
+    # ─── 1. 确定位次 ───
+    student_rank = None
+    rank_source = ""
+    estimated_rank = None
+
+    if rank and rank > 0:
+        student_rank = rank
+        rank_source = "用户提供"
+    elif score and score > 0:
+        # 通过一分一段表反查位次
+        category_for_table = category
+        if category in ("物理/不限", "物理/化学", "物理/生物", "物理/地理",
+                        "物理/思想政治", "物理/化学+生物"):
+            category_for_table = "物理类"
+        elif category in ("历史/不限", "历史/思想政治", "历史/地理", "历史/生物"):
+            category_for_table = "历史类"
+
+        rank_sql = T("""
+            SELECT cumulative_count FROM score_rank_tables
+            WHERE province = :province AND year = :year AND category = :category AND score = :score
+            LIMIT 1
+        """)
+        rank_result = db.execute(rank_sql, {
+            "province": province, "year": year, "category": category_for_table, "score": score
+        }).fetchone()
+
+        if rank_result:
+            student_rank = rank_result[0]
+            estimated_rank = student_rank
+            rank_source = "分数估算"
+        else:
+            # 找最近的分数
+            nearest_sql = T("""
+                SELECT score, cumulative_count FROM score_rank_tables
+                WHERE province = :province AND year = :year AND category = :category AND score <= :score
+                ORDER BY score DESC LIMIT 1
+            """)
+            nearest = db.execute(nearest_sql, {
+                "province": province, "year": year,
+                "category": category_for_table, "score": score
+            }).fetchone()
+            if nearest:
+                student_rank = nearest[1]
+                estimated_rank = student_rank
+                rank_source = "分数估算（近似）"
+
+    if not student_rank:
+        return ReachMatchSafetyResponse(
+            province=province,
+            category=category,
+            note="无法确定位次，请提供省排名（位次）或有效的分数"
+        )
+
+    # ─── 2. 查询院校录取数据 ───
+    query_batch = batch or "本科一批"
+
+    # 科类映射
+    score_category = category
+    if category in ("物理/不限", "物理/化学", "物理/生物", "物理/地理",
+                    "物理/思想政治", "物理/化学+生物"):
+        score_category = "理科"
+    elif category in ("历史/不限", "历史/思想政治", "历史/地理", "历史/生物"):
+        score_category = "文科"
+
+    categories_to_try = [score_category]
+    if score_category in ("理科", "文科"):
+        new_cat = "物理类" if score_category == "理科" else "历史类"
+        categories_to_try.append(new_cat)
+
+    all_results = []
+    for cat in categories_to_try:
+        sql = T("""
+            SELECT
+                college_name, college_code, batch,
+                MIN(min_score) FILTER (WHERE year = 2024) as s24_min,
+                MIN(min_rank) FILTER (WHERE year = 2024) as r24_min,
+                AVG(min_score) FILTER (WHERE year = 2024) as s24_avg,
+                MIN(min_score) FILTER (WHERE year = 2023) as s23_min,
+                MIN(min_rank) FILTER (WHERE year = 2023) as r23_min,
+                MIN(min_score) FILTER (WHERE year = 2022) as s22_min,
+                MIN(min_rank) FILTER (WHERE year = 2022) as r22_min,
+                MAX(control_score) as ctrl_score,
+                SUM(enrollment) as total_enrollment,
+                MIN(min_rank) as best_rank
+            FROM scores
+            WHERE province = :province
+              AND category = :category
+              AND batch = :batch
+              AND min_rank IS NOT NULL
+              AND min_rank > 0
+            GROUP BY college_name, college_code, batch
+            HAVING best_rank IS NOT NULL
+            ORDER BY best_rank ASC
+        """)
+
+        try:
+            results = db.execute(sql, {
+                "province": province, "category": cat, "batch": query_batch
+            }).fetchall()
+            all_results.extend(results)
+        except Exception as e:
+            # FILTER 语法可能不被所有 SQLite 版本支持，降级处理
+            if "FILTER" in str(e):
+                sql_fallback = T("""
+                    SELECT
+                        college_name, college_code, batch,
+                        NULL as s24_min, NULL as r24_min, NULL as s24_avg,
+                        NULL as s23_min, NULL as r23_min,
+                        NULL as s22_min, NULL as r22_min,
+                        NULL as ctrl_score, NULL as total_enrollment,
+                        MIN(min_rank) as best_rank
+                    FROM scores
+                    WHERE province = :province
+                      AND category = :category
+                      AND batch = :batch
+                      AND min_rank IS NOT NULL AND min_rank > 0
+                    GROUP BY college_name, college_code, batch
+                    HAVING best_rank IS NOT NULL
+                    ORDER BY best_rank ASC
+                """)
+                results = db.execute(sql_fallback, {
+                    "province": province, "category": cat, "batch": query_batch
+                }).fetchall()
+                all_results.extend(results)
+
+    # 去重（按院校名去重，保留位次最好的）
+    seen = {}
+    for row in all_results:
+        name = row[0]
+        if name not in seen or (row[12] is not None and (seen[name][12] is None or row[12] < seen[name][12])):
+            seen[name] = row
+    unique_results = list(seen.values())
+
+    # ─── 3. 获取院校标签 ───
+    tags_map = {}
+    if unique_results:
+        college_names = [r[0] for r in unique_results[:200]]
+        placeholders = ",".join(
+            f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in college_names
+        )
+        try:
+            tags_results = db.execute(T(f"""
+                SELECT name,
+                    CASE WHEN is_985 = 1 THEN '985' ELSE NULL END,
+                    CASE WHEN is_211 = 1 THEN '211' ELSE NULL END,
+                    CASE WHEN is_double_first = 1 THEN '双一流' ELSE NULL END
+                FROM colleges WHERE name IN ({placeholders})
+            """)).fetchall()
+            for tr in tags_results:
+                tags = [t for t in [tr[1], tr[2], tr[3]] if t]
+                tags_map[tr[0]] = tags
+        except Exception:
+            pass
+
+    # ─── 4. 分类：冲/稳/保 ───
+    reach_items = []
+    match_items = []
+    safety_items = []
+
+    REACH_MAX = 5000    # 冲：位次比考生高 500~5000 名
+    REACH_MIN = 500     # 冲的最小差距
+    MATCH_RANGE = 1000  # 稳：±1000 名
+    SAFETY_MIN = 1000   # 保：位次比考生低 1000+
+    SAFETY_MAX = 8000   # 保的范围上限
+
+    for row in unique_results:
+        college_name = row[0]
+        best_rank = row[12]
+        if best_rank is None:
+            continue
+
+        rank_gap = student_rank - best_rank
+
+        # 提取分数较低的热门专业
+        top_majors = []
+        try:
+            cat_list = ",".join(f"'{c}'" for c in categories_to_try)
+            major_result = db.execute(T(f"""
+                SELECT major_scores FROM scores
+                WHERE college_name = :name AND province = :province
+                  AND category IN ({cat_list}) AND batch = :batch
+                  AND major_scores IS NOT NULL AND major_scores != "[]"
+                LIMIT 1
+            """), {"name": college_name, "province": province, "batch": query_batch}).fetchone()
+            if major_result:
+                majors_data = _json.loads(major_result[0])
+                sorted_majors = sorted(majors_data, key=lambda x: x.get("score", 999))
+                top_majors = [m["major"] for m in sorted_majors[:5] if "major" in m]
+        except Exception:
+            pass
+
+        item = CollegeRecommendation(
+            college_name=college_name,
+            college_code=row[1],
+            batch=row[2],
+            min_score_2024=row[3],
+            min_rank_2024=row[4],
+            avg_score_2024=int(row[5]) if row[5] else None,
+            min_score_2023=row[6],
+            min_rank_2023=row[7],
+            min_score_2022=row[8],
+            min_rank_2022=row[9],
+            control_score=row[10],
+            enrollment=row[11],
+            rank_gap=rank_gap,
+            top_majors=top_majors[:5] if top_majors else None,
+            tags=tags_map.get(college_name, None),
+            risk_level=""
+        )
+
+        if rank_gap < -REACH_MIN and rank_gap >= -REACH_MAX:
+            item.risk_level = "冲"
+            reach_items.append(item)
+        elif -MATCH_RANGE <= rank_gap <= MATCH_RANGE:
+            item.risk_level = "稳"
+            match_items.append(item)
+        elif rank_gap > SAFETY_MIN and rank_gap <= SAFETY_MAX:
+            item.risk_level = "保"
+            safety_items.append(item)
+
+    # 排序
+    reach_items.sort(key=lambda x: x.rank_gap or 0, reverse=True)
+    match_items.sort(key=lambda x: abs(x.rank_gap or 0))
+    safety_items.sort(key=lambda x: x.rank_gap or 0)
+
+    total = len(reach_items) + len(match_items) + len(safety_items)
+
+    note_parts = []
+    if estimated_rank:
+        note_parts.append(f"位次由分数{score}分估算而得，仅供参考")
+    if not reach_items:
+        note_parts.append("没有找到合适的冲刺院校（可能位次较高或数据不足）")
+    if not safety_items:
+        note_parts.append("没有找到保底院校，建议适当扩大保底范围")
+
+    return ReachMatchSafetyResponse(
+        student_score=score,
+        student_rank=student_rank,
+        province=province,
+        category=category,
+        estimated_rank=estimated_rank,
+        rank_source=rank_source,
+        reach=reach_items[:reach_limit],
+        match=match_items[:match_limit],
+        safety=safety_items[:safety_limit],
+        total_found=total,
+        note="；".join(note_parts) if note_parts else "推荐完成"
+    )
