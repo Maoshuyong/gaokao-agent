@@ -15,6 +15,7 @@ from config import settings
 from db import init_db
 from api import tools_router, colleges_router, report_router
 from api.llm_proxy import router as llm_proxy_router
+from api.major_enrollments import router as major_enrollments_router
 
 # 前端静态文件目录
 STATIC_DIR = Path(__file__).parent / "static"
@@ -213,6 +214,7 @@ app.include_router(tools_router)
 app.include_router(colleges_router)
 app.include_router(report_router)
 app.include_router(llm_proxy_router)  # LLM 代理（小程序 AI 对话）
+app.include_router(major_enrollments_router)  # 专业级招生数据 API
 
 
 # 全局异常处理

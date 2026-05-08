@@ -241,6 +241,29 @@ const TOOLS = [
         required: ['college_name', 'province', 'category']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_major_enrollments',
+      description: '搜索2025年专业级招生数据。支持按院校名称、专业名称、分数范围、批次、科类筛选。返回专业级招生信息，包含2025年招生计划、历年录取分数、院校信息等。当用户询问"某某专业在陕西的录取情况"、"2025年招生计划"、"某院校有哪些专业招生"时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          college_name: { type: 'string', description: '院校名称关键词（可选）' },
+          major_name: { type: 'string', description: '专业名称关键词（可选）' },
+          province: { type: 'string', description: '省份，默认"陕西"' },
+          year: { type: 'integer', description: '年份，默认2025' },
+          batch: { type: 'string', description: '批次，如"本科批""本科提前批"（可选）' },
+          category: { type: 'string', description: '科类：文科/理科/物理类/历史类（可选）' },
+          min_score: { type: 'integer', description: '最低分数（可选，筛选录取分数高于此值的专业）' },
+          max_score: { type: 'integer', description: '最高分数（可选，筛选录取分数低于此值的专业）' },
+          page: { type: 'integer', description: '页码，默认1' },
+          page_size: { type: 'integer', description: '每页数量，默认20' }
+        },
+        required: ['province', 'year']
+      }
+    }
   }
 ];
 
@@ -303,6 +326,13 @@ async function executeToolCall(name, args) {
       if (args.year) url.searchParams.set('year', String(args.year));
       break;
     }
+    case 'search_major_enrollments': {
+      url.pathname = '/api/v1/major-enrollments/';
+      Object.entries(args).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+      });
+      break;
+    }
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -361,6 +391,7 @@ function getToolStatusText(name) {
     'get_college_detail': '📖 正在获取院校详情...',
     'get_control_scores': '📏 正在查询省控线...',
     'get_major_scores': '🎓 正在查询专业分数线...',
+    'search_major_enrollments': '🔍 正在查询专业招生数据...',
   };
   return map[name] || `🔧 正在调用工具: ${name}`;
 }

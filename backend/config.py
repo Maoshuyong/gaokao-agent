@@ -23,9 +23,11 @@ class Settings(BaseSettings):
     # 服务端口 — Render 等云平台通过 PORT 环境变量注入
     PORT: int = int(os.environ.get("PORT", "8000"))
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+        "extra": "ignore",
+    }
 
 
 settings = Settings()
