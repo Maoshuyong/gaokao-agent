@@ -96,6 +96,7 @@ SOUL_PROMPT = """你是「高报专家」，一个专业、温暖、有洞察力
 - 搜索院校 → search_colleges 工具
 - 查询院校录取分数 → get_college_scores 工具
 - 查询省控线 → get_province_control_line 工具
+- 查询专业招生数据 → search_major_enrollments 工具
 
 【数据处理原则】
 - 如果工具返回的数据包含"模拟数据"提示，说明当前是测试环境，你可以结合自己的知识给出准确回答
@@ -179,6 +180,22 @@ TOOLS = [
                     "year": {"type": "integer", "description": "年份：2022、2023、2024"}
                 },
                 "required": ["province", "batch", "category"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_major_enrollments",
+            "description": "查询专业级招生数据（包含院校、专业、历年录取分数、招生计划），当用户询问某院校有哪些专业、某专业的录取分数或招生计划时使用",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "college_name": {"type": "string", "description": "院校名称关键词，如'清华大学'"},
+                    "major_name": {"type": "string", "description": "专业名称关键词，如'计算机'"},
+                    "province": {"type": "string", "description": "省份名称，如'陕西'"},
+                    "year": {"type": "integer", "description": "年份：2022、2023、2024、2025"}
+                }
             }
         }
     }
@@ -290,6 +307,37 @@ def detect_intent(user_message: str) -> tuple:
         if "province" in args and "batch" in args and "category" in args:
             return ("get_province_control_line", args)
     
+    # 4. 检测 search_major_enrollments（查询专业招生数据）
+    # 关键词：专业、招生、计划
+    major_keywords = ["专业", "招生", "计划", "录取专业"]
+    if any(kw in msg for kw in major_keywords):
+        args = {}
+
+        # 提取院校名称
+        college_match = re.search(r'([\u4e00-\u9fa5]{2,10})(大学|学院)', msg)
+        if college_match:
+            args["college_name"] = college_match.group(0)
+
+        # 提取专业名称（"XX专业"模式）
+        major_match = re.search(r'([\u4e00-\u9fa5]{2,10})专业', msg)
+        if major_match:
+            args["major_name"] = major_match.group(1)
+
+        # 提取省份
+        for prov in provinces:
+            if prov in msg:
+                args["province"] = prov
+                break
+
+        # 提取年份
+        year_match = re.search(r'20(\d{2})', msg)
+        if year_match:
+            args["year"] = int("20" + year_match.group(1))
+
+        # 如果有足够的条件，返回意图
+        if "college_name" in args or "major_name" in args:
+            return ("search_major_enrollments", args)
+
     # 无匹配意图
     return (None, None)
 
@@ -437,6 +485,78 @@ async def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 "control_line": control_line
             }, ensure_ascii=False)
         
+        elif tool_name == "search_major_enrollments":
+            # 查询专业级招生数据
+            college_name = tool_args.get("college_name", "")
+            major_name = tool_args.get("major_name", "")
+            province = tool_args.get("province", "")
+            year = tool_args.get("year", 2025)
+
+            # 构造查询
+            query = """
+                SELECT id, college_name, major_name, year, province, batch, category,
+                       plan_count, enrollment_2024, enrollment_2023, enrollment_2022,
+                       score_2024_min, rank_2024_min, score_2023_min, rank_2023_min,
+                       duration, tuition, college_rank, double_first_class
+                FROM major_enrollments
+                WHERE 1=1
+            """
+            params = []
+
+            if college_name:
+                query += " AND college_name LIKE ?"
+                params.append(f"%{college_name}%")
+            if major_name:
+                query += " AND major_name LIKE ?"
+                params.append(f"%{major_name}%")
+            if province:
+                query += " AND province = ?"
+                params.append(province)
+            if year:
+                query += " AND year = ?"
+                params.append(year)
+
+            query += " LIMIT 20"
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                results.append({
+                    "id": row["id"],
+                    "college_name": row["college_name"],
+                    "major_name": row["major_name"],
+                    "year": row["year"],
+                    "province": row["province"],
+                    "batch": row["batch"],
+                    "category": row["category"],
+                    "plan_count": row["plan_count"],
+                    "enrollment_2024": row["enrollment_2024"],
+                    "enrollment_2023": row["enrollment_2023"],
+                    "enrollment_2022": row["enrollment_2022"],
+                    "score_2024_min": row["score_2024_min"],
+                    "rank_2024_min": row["rank_2024_min"],
+                    "score_2023_min": row["score_2023_min"],
+                    "rank_2023_min": row["rank_2023_min"],
+                    "duration": row["duration"],
+                    "tuition": row["tuition"],
+                    "college_rank": row["college_rank"],
+                    "double_first_class": bool(row["double_first_class"]) if row["double_first_class"] is not None else None
+                })
+
+            return json.dumps({
+                "status": "success",
+                "data": results,
+                "total": len(results),
+                "query": {
+                    "college_name": college_name,
+                    "major_name": major_name,
+                    "province": province,
+                    "year": year
+                }
+            }, ensure_ascii=False)
+
         else:
             return json.dumps({
                 "status": "error",
