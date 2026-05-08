@@ -11,8 +11,9 @@ import os
 
 # 创建引擎（生产环境关闭 SQL echo）
 debug = os.environ.get("DEBUG", "false").lower() == "true"
+# 使用 property（动态获取 DATABASE_URL，支持 start.sh 设置）
 engine = create_engine(
-    settings.DATABASE_URL,
+    settings.DATABASE_URL,  # 调用 property
     connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
     echo=debug
 )

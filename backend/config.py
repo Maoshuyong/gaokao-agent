@@ -14,8 +14,15 @@ class Settings(BaseSettings):
     VERSION: str = "2.0.0"
     DEBUG: bool = True
 
-    # 数据库
-    DATABASE_URL: str = "sqlite:///./data/gaokao.db"
+    # 数据库（连接字符串，不是下载 URL）
+    # 由 start.sh 设置正确的数据库连接字符串
+    # 注意：不要设置环境变量 DATABASE_URL（会冲突），改用 DATABASE_FILE
+    DATABASE_FILE: str = "sqlite:///./data/gaokao.db"
+    
+    @property
+    def DATABASE_URL(self) -> str:
+        """动态获取数据库连接字符串（优先从环境变量读取，支持 start.sh 设置）"""
+        return os.environ.get("DATABASE_URL", self.DATABASE_FILE)
 
     # 数据路径
     DATA_DIR: str = "./data"
