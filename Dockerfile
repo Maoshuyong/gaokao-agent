@@ -17,9 +17,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制后端应用代码
 COPY backend/ .
 
-# 复制数据库文件（避免运行时下载失败）
-COPY backend/data/gaokao.db data/gaokao.db
-
 # 复制 start.sh
 COPY start.sh .
 
