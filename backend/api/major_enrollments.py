@@ -372,14 +372,13 @@ async def recommend_majors_by_mbti(
             major_name,
             AVG(CASE WHEN score_2024_min IS NOT NULL THEN score_2024_min END) as avg_score,
             MIN(score_2024_min) as min_score,
-            COUNT(DISTINCT college_name) as college_count,
-            GROUP_CONCAT(DISTINCT college_name, '、') as colleges
+            COUNT(DISTINCT college_name) as college_count
         FROM major_enrollments
         WHERE province = :province 
           AND year = :year
           AND ({where_clause})
         GROUP BY major_name
-            ORDER BY 
+        ORDER BY 
             college_count DESC,
             avg_score DESC
         LIMIT :limit
@@ -420,7 +419,7 @@ async def recommend_majors_by_mbti(
             mbti_name=mbti_names.get(mbti_type, ""),
             major_name=row[0],
             match_reason=match_reasons.get(mbti_type, ""),
-            related_colleges=row[3].split("、") if row[3] else [],
+            related_colleges=[],  # TODO: 后续通过单独查询获取
             min_score_2024=row[2],
             avg_score_2024=round(row[1], 1) if row[1] else None
         )
