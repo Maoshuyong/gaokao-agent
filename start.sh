@@ -4,7 +4,7 @@
 #   - DATABASE_URL: 数据库下载URL（必填）
 #   - DATABASE_PATH: 数据库保存路径（默认：backend/data/gaokao_shanxi_recruit.db）
 
-set -e  # 任何错误都退出
+# set -e  # 注释掉：数据库下载失败也继续启动应用
 
 echo "🚀 启动 gaokao-agent..."
 
