@@ -355,7 +355,7 @@ async def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
     
     # 连接数据库（优先使用环境变量，否则使用示例数据库）
     db_path = os.environ.get("DATABASE_PATH", 
-                        os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "gaokao_shanxi_recruit.db"))
+                        os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "gaokao.db"))
     print(f"📂 数据库路径: {db_path}")
     
     conn = sqlite3.connect(db_path)
