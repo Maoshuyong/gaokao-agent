@@ -9,8 +9,8 @@ set -e  # 任何错误都退出
 echo "🚀 启动 gaokao-agent..."
 
 # 数据库配置（从环境变量读取，提供默认值）
-DB_PATH="${DATABASE_PATH:-backend/data/gaokao_shanxi_recruit.db}"
-DB_URL="${DATABASE_URL:-http://tecjtbmlo.hn-bkt.clouddn.com/gaokao_shanxi_recruit.db}"
+DB_PATH="${DATABASE_PATH:-backend/data/gaokao.db}"
+DB_URL="${DATABASE_URL:-http://tecjtbmlo.hn-bkt.clouddn.com/gaokao.db}"
 
 # 检查环境变量
 if [ -z "$DB_URL" ]; then

@@ -6,7 +6,7 @@ services:
     repo: https://github.com/Maoshuyong/gaokao-agent
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT server:app
+    startCommand: bash start.sh
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
