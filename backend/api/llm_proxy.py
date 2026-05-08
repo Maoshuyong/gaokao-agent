@@ -222,7 +222,7 @@ def detect_intent(user_message: str) -> tuple:
     # 1. 检测 search_colleges（搜索院校）
     # 关键词：大学、学院、985、211、双一流、高校
     college_keywords = ["大学", "学院", "985", "211", "双一流", "高校", "本科学校"]
-    if any(kw in msg for kw in college_keywords):
+    if any(kw in msg for kw in college_keywords) and "专业" not in msg:
         args = {}
         
         # 提取省份
@@ -249,7 +249,7 @@ def detect_intent(user_message: str) -> tuple:
     # 2. 检测 get_college_scores（查询录取分数）
     # 关键词：分数、录取、分数线、多少分
     score_keywords = ["分数", "录取", "分数线", "多少分", "投档"]
-    if any(kw in msg for kw in score_keywords):
+    if any(kw in msg for kw in score_keywords) and "专业" not in msg:
         args = {}
         
         # 提取院校名称（简单匹配：XXX大学/学院）
@@ -318,10 +318,13 @@ def detect_intent(user_message: str) -> tuple:
         if college_match:
             args["college_name"] = college_match.group(0)
 
-        # 提取专业名称（"XX专业"模式）
-        major_match = re.search(r'([\u4e00-\u9fa5]{2,10})专业', msg)
+        # 提取专业名称（"XX专业"模式，排除大学/学院名称）
+        # 只匹配2-6个汉字+专业，且不含"大学""学院"
+        major_match = re.search(r'(?!.*(大学|学院))([\u4e00-\u9fa5]{2,6})专业', msg)
         if major_match:
-            args["major_name"] = major_match.group(1)
+            candidate = major_match.group(2)
+            if "大学" not in candidate and "学院" not in candidate:
+                args["major_name"] = candidate
 
         # 提取省份
         for prov in provinces:
